@@ -22,6 +22,7 @@ PORT = int(os.environ.get("HUB_PORT", "4600"))
 SECRET = os.environ.get("HUB_SECRET", "")
 ADMIN_TOKEN = os.environ.get("HUB_ADMIN_TOKEN", "")  # separate, stronger cred for /admin/* (game actions)
 DB_PATH = os.environ.get("HUB_DB", "/data/hub.db")
+SNAP_DIR = os.environ.get("HUB_SNAP_DIR", "/data/snaps")  # static island snapshots for the region map
 LIVE_SEC = int(os.environ.get("HUB_LIVE_SEC", "360"))
 STANCES = ("ally", "neutral", "rival", "enemy")
 # Hostility is FRICTION, not a wall (docs/hub-design.md §8): even enemies leak — some cargo is
@@ -156,74 +157,67 @@ def world_map():
 PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>The Archipelago</title>
 <style>
-:root{--sea:#a7c5ba;--seaDeep:#739e99;--ink:#1b2b28;--paper:#f7f6f3;--kelp:#c8892a;--ember:#E4572E;--live:#2f9e6d}
+:root{--sea:#a7c5ba;--seaDeep:#6f9a95;--ink:#12302b;--live:#2f9e6d;--ember:#E4572E}
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden}
-body{background:radial-gradient(140% 120% at 50% 30%,var(--sea) 0%,var(--seaDeep) 100%);color:var(--ink);font:15px/1.4 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;-webkit-font-smoothing:antialiased}
-header{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:baseline;gap:12px;padding:14px 18px;pointer-events:none;text-shadow:0 1px 3px rgba(255,255,255,.5)}
+body{background:radial-gradient(150% 130% at 50% 28%,var(--sea) 0%,var(--seaDeep) 100%);color:var(--ink);font:15px/1.4 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+header{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:baseline;gap:12px;padding:14px 18px;pointer-events:none;text-shadow:0 1px 3px rgba(255,255,255,.55)}
 .eyebrow{letter-spacing:.2em;text-transform:uppercase;font-size:11px;font-weight:800;color:#0f3a34}
-h1{font-size:20px;margin:0;font-weight:800;color:#12302b}
-.count{margin-left:auto;font-size:13px;color:#12302b;pointer-events:auto}
+h1{font-size:20px;margin:0;font-weight:800}
+.count{margin-left:auto;font-size:13px;pointer-events:auto}
 #board{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
-.isle{position:absolute;cursor:pointer;transition:filter .15s}
-.isle:hover{filter:drop-shadow(0 6px 18px rgba(20,40,36,.35))}
-.isle iframe{width:100%;height:100%;border:0;display:block;pointer-events:none;background:transparent;
-  -webkit-mask-image:radial-gradient(ellipse 62% 62% at 50% 50%,#000 58%,transparent 80%);
-  mask-image:radial-gradient(ellipse 62% 62% at 50% 50%,#000 58%,transparent 80%)}
-.lbl{position:absolute;left:50%;bottom:8%;transform:translateX(-50%);text-align:center;white-space:nowrap;pointer-events:none}
-.lbl .nm{font-weight:800;font-size:20px;color:#12302b;text-shadow:0 1px 2px rgba(247,246,243,.85)}
-.lbl .meta{font-size:12px;color:#20403a;text-shadow:0 1px 2px rgba(247,246,243,.85)}
+.isle{position:absolute;cursor:pointer;transition:filter .15s,transform .15s}
+.isle:hover{filter:drop-shadow(0 8px 22px rgba(20,45,40,.4));z-index:3}
+/* show the WHOLE island + its full coastline; only the outer sea margin feathers into the region sea (same water colour, so it blends) */
+.isle img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none;
+  -webkit-mask-image:radial-gradient(ellipse 82% 82% at 50% 50%,#000 72%,transparent 96%);
+  mask-image:radial-gradient(ellipse 82% 82% at 50% 50%,#000 72%,transparent 96%)}
+.lbl{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);text-align:center;white-space:nowrap;pointer-events:none}
+.lbl .nm{font-weight:800;font-size:19px;text-shadow:0 1px 2px rgba(247,246,243,.9)}
+.lbl .meta{font-size:12px;color:#20403a;text-shadow:0 1px 2px rgba(247,246,243,.9)}
 .lbl .dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:5px;background:var(--live)}
 .lbl .dot.q{background:#7d8f88}
-.stage-hint{position:fixed;right:14px;bottom:12px;z-index:6;font-size:12px;color:#12302b;background:rgba(247,246,243,.7);padding:6px 10px;border-radius:10px}
-.enter{position:fixed;inset:0;z-index:20;background:var(--sea);opacity:0;pointer-events:none;transition:opacity .45s}
+.hint{position:fixed;right:14px;bottom:12px;z-index:6;font-size:12px;background:rgba(247,246,243,.72);padding:6px 10px;border-radius:10px}
+.enter{position:fixed;inset:0;z-index:20;background:var(--sea);opacity:0;pointer-events:none;transition:opacity .4s}
 .err{position:fixed;inset:0;display:grid;place-items:center;color:var(--ember);font-weight:700}
 </style></head><body>
 <header><span class=eyebrow>Unwatched</span><h1>The Archipelago</h1><span class=count id=count></span></header>
 <div id=board></div>
-<div class=stage-hint>scroll / pinch to zoom · drag to pan · click an island to enter</div>
+<div class=hint>scroll / pinch to zoom · drag to pan · click an island to enter</div>
 <div class=enter id=enter></div>
 <script>
 const POS={capital:[1000,600],island:[430,360],kestrel:[1560,360],cairnhold:[1640,900],vinehaven:[500,960]};
 const KIND={island:"the founding town",kestrel:"a fishing isle",cairnhold:"a mining hold",vinehaven:"a vineyard",capital:"the capital"};
-const WG={clear:"☀️",rain:"🌧️",storm:"⛈️",wind:"🌬️",fog:"🌫️",snow:"❄️"};
-const SCALE=0.22, DEF={w:2800,h:1700};
-const board=document.getElementById("board");
-let view={x:0,y:0,z:1};
+const SCALE=0.17, DEFW=3000;
+const board=document.getElementById("board"); let view={x:0,y:0,z:1};
 function apply(){board.style.transform=`translate(${view.x}px,${view.y}px) scale(${view.z})`;}
 function esc(s){return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
-
 async function build(){
   let d; try{ d=await (await fetch("/world/islands",{cache:"no-store"})).json(); }
   catch(e){ document.body.insertAdjacentHTML("beforeend","<div class=err>Could not reach the hub.</div>"); return; }
   const xs=d.islands||[]; board.innerHTML="";
   let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
   xs.forEach((i,ix)=>{
-    const sz=i.size||DEF; const w=sz.w*SCALE, h=sz.h*SCALE;
-    let c=POS[i.id]; if(!c){const a=-Math.PI/2+ix*2*Math.PI/Math.max(1,xs.length); c=[1000+620*Math.cos(a),620+430*Math.sin(a)];}
-    const left=c[0]-w/2, top=c[1]-h/2;
-    minx=Math.min(minx,left);miny=Math.min(miny,top);maxx=Math.max(maxx,left+w);maxy=Math.max(maxy,top+h);
-    const el=document.createElement("div"); el.className="isle"; el.style.cssText=`left:${left}px;top:${top}px;width:${w}px;height:${h}px`;
-    el.dataset.url=i.url||"";
-    const src=(i.url||"")+"/film?view=map&clean=1&fx=0";
-    el.innerHTML=`<iframe loading=lazy scrolling=no src="${src}"></iframe>`+
+    const side=((i.size&&i.size.w)||DEFW)*SCALE;
+    let c=POS[i.id]; if(!c){const a=-Math.PI/2+ix*2*Math.PI/Math.max(1,xs.length); c=[1000+640*Math.cos(a),620+440*Math.sin(a)];}
+    const left=c[0]-side/2, top=c[1]-side/2;
+    minx=Math.min(minx,left);miny=Math.min(miny,top);maxx=Math.max(maxx,left+side);maxy=Math.max(maxy,top+side);
+    const el=document.createElement("div"); el.className="isle"; el.style.cssText=`left:${left}px;top:${top}px;width:${side}px;height:${side}px`;
+    el.innerHTML=`<img loading=lazy src="/snap/${encodeURIComponent(i.id)}.png?v=${Math.floor((i.lastSeen||0))}" alt="${esc(i.name)}" onerror="this.style.opacity=.25">`+
       `<div class=lbl><div class=nm>${i.pack==="capital"?"★ ":""}${esc(i.name)}</div>`+
       `<div class=meta><span class="dot ${i.live?"":"q"}"></span>${i.population||0} souls · day ${i.day||0} · ${esc(i.weather||"?")} · ${esc(KIND[i.pack]||i.pack)}</div></div>`;
     el.addEventListener("click",()=>enter(i));
     board.appendChild(el);
   });
   document.getElementById("count").textContent=xs.length+" islands · "+xs.filter(i=>i.live).length+" live";
-  // fit the whole archipelago to the screen
-  if(xs.length){const bw=maxx-minx,bh=maxy-miny,pad=90;const z=Math.min((innerWidth-pad*2)/bw,(innerHeight-pad*2)/bh,1.1);view.z=z;view.x=(innerWidth-bw*z)/2-minx*z;view.y=(innerHeight-bh*z)/2-miny*z+20;apply();}
+  if(xs.length){const bw=maxx-minx,bh=maxy-miny,pad=90;const z=Math.min((innerWidth-pad*2)/bw,(innerHeight-pad*2)/bh,1.2);view.z=z;view.x=(innerWidth-bw*z)/2-minx*z;view.y=(innerHeight-bh*z)/2-miny*z+20;apply();}
 }
-function enter(i){ if(!i.url)return; const e=document.getElementById("enter"); e.style.opacity="1"; setTimeout(()=>location.href=i.url,430); }
-
-// pan + zoom (drag to pan, wheel/pinch to zoom); a click without a drag enters
+function enter(i){ if(!i.url)return; const e=document.getElementById("enter"); e.style.opacity="1"; setTimeout(()=>location.href=i.url,400); }
 let drag=null,moved=false;
-addEventListener("pointerdown",e=>{if(e.target.closest("header,.stage-hint"))return;drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y};moved=false;});
+addEventListener("pointerdown",e=>{if(e.target.closest("header,.hint"))return;drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y};moved=false;});
 addEventListener("pointermove",e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>5)moved=true;view.x=drag.vx+dx;view.y=drag.vy+dy;apply();});
-addEventListener("pointerup",()=>{drag=null;});
-addEventListener("click",e=>{if(moved)e.stopPropagation();},true); // swallow the click that ended a drag
-addEventListener("wheel",e=>{e.preventDefault();const f=e.deltaY<0?1.12:0.9;const nz=Math.max(0.15,Math.min(3,view.z*f));const mx=e.clientX,my=e.clientY;view.x=mx-(mx-view.x)*(nz/view.z);view.y=my-(my-view.y)*(nz/view.z);view.z=nz;apply();},{passive:false});
+addEventListener("pointerup",()=>{setTimeout(()=>drag=null,0);});
+addEventListener("click",e=>{if(moved)e.stopPropagation();},true);
+addEventListener("wheel",e=>{e.preventDefault();const f=e.deltaY<0?1.12:0.9;const nz=Math.max(0.15,Math.min(3,view.z*f));view.x=e.clientX-(e.clientX-view.x)*(nz/view.z);view.y=e.clientY-(e.clientY-view.y)*(nz/view.z);view.z=nz;apply();},{passive:false});
 build();
 </script></body></html>"""
 
@@ -260,6 +254,20 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, PAGE, "text/html; charset=utf-8")
         if p == "/health":
             return self._send(200, {"ok": True, "service": "uw-hub", "islands": len(all_islands())})
+        m = re.match(r"^/snap/([A-Za-z0-9_-]+)\.png$", p)  # static island snapshot for the region map
+        if m:
+            fp = os.path.join(SNAP_DIR, m.group(1) + ".png")
+            if os.path.isfile(fp):
+                with open(fp, "rb") as fh:
+                    body = fh.read()
+                self.send_response(200); self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=300")
+                self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+                return
+            return self._send(404, {"error": "no snapshot yet"})
         if p == "/world/islands":
             return self._send(200, {"islands": all_islands()})
         if p == "/world/map":
