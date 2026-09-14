@@ -1006,6 +1006,7 @@ export class Town {
     if (h === 6) { this.cart(); this.prosper(); }
     if (h === 7) this.merchants(); // the trade house works the gluts before the morning mainland boat
     if (h === 8) this.sellToMainland();
+    if (h === 10) this.tourism(); // the day's visitors, once the island is awake and open
     const feast = this.feastToday();
     if (h === 9 && feast && this.places.has(feast.place) && !this.gatherings.some((g) => g.kind === "feast" && g.day === this.day)) this.gather("feast", feast.place, this.day, 13, [], feast.name);
     if (h === 9 && (this.dayOfMonth === 1 || (!this.mayor && this.day >= 2)) && !this.gatherings.some((g) => g.kind === "election" && g.day === this.day)) this.gather("election", "council", this.day, 10, [], this.mayor ? "the council chooses its mayor for the month" : "the council chooses the island's first mayor");
@@ -1416,6 +1417,33 @@ export class Town {
         }
       }
     }
+  }
+  /**
+   * Tourism. When the boat crosses, day-trippers come for the island's attractions — its public and civic places — and leave money behind at the inn, the attractions themselves, and the market. How many come is drawn by how much there is to see: each attraction draws, and a decorated one draws more; a feast day brings a crowd. Their coins come from the mainland (minted on the way in); what they spend stays on the island in the tills and purses of what they visited, and what they don't spend goes home with them (never minted at all). No visitors in a storm, when the boat does not cross.
+   */
+  private tourism(): void {
+    if (!this.boatRunning) return; // no boat, no visitors
+    const inn = this.places.get("inn"); if (!inn) return; // nowhere to host them
+    const draws = [...this.places.values()].filter((p) => (p.kind === "public" || p.kind === "civic") && !(p.brokenUntil && p.brokenUntil > this.day));
+    if (!draws.length) return;
+    const charm = draws.reduce((s, p) => s + 1 + Math.min(3, p.decorations?.length ?? 0), 0); // a decorated attraction is worth more of a look
+    const feast = this.feastToday();
+    const visitors = Math.min(8, Math.round(charm / 3) + (feast ? 3 : 0));
+    if (visitors <= 0) return;
+    const SPEND_EACH = 3; // coins a visitor is good for: a bite at the inn, a look at the sights, something from the market
+    const stops = [inn, ...draws, this.places.get("market")].filter((p): p is Place => !!p);
+    let spent = 0;
+    for (let v = 0; v < visitors; v++) {
+      let purse = SPEND_EACH;
+      for (const place of stops) {
+        if (purse <= 0) break;
+        purse -= 1; spent += 1;
+        const o = place.owner ? this.agents.get(place.owner) : null; if (o) o.coins += 1; else place.treasury += 1;
+      }
+    }
+    if (spent <= 0) return;
+    this.minted += spent; // the coins the visitors left came from the mainland
+    this.emit("boat.dock", [], "harbor", `The boat brought ${visitors} visitor${visitors === 1 ? "" : "s"} to ${this.name}. They spent ${spent} coins about the island${feast ? `, the ${feast.name} in full swing` : ""}.`, 0.3, { visitors, coins: spent, ...(feast ? { feast: feast.name } : {}) });
   }
   /** What the island could put on the boat this morning: the surplus above what each place keeps back. */
   cargoOffers(): { item: string; qty: number; price: number; place: PlaceId }[] {
