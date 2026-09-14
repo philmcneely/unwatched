@@ -167,10 +167,11 @@ h1{font-size:20px;margin:0;font-weight:800}
 #board{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
 .isle{position:absolute;cursor:pointer;transition:filter .15s,transform .15s}
 .isle:hover{filter:drop-shadow(0 8px 22px rgba(20,45,40,.4));z-index:3}
-/* show the WHOLE island + its full coastline; only the outer sea margin feathers into the region sea (same water colour, so it blends) */
+/* show the WHOLE island + its full coastline; the island fills ~81% of its aspect-matched snapshot,
+   so we keep everything solid to 84% and only feather the very outer sea margin into the region sea */
 .isle img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none;
-  -webkit-mask-image:radial-gradient(ellipse 82% 82% at 50% 50%,#000 72%,transparent 96%);
-  mask-image:radial-gradient(ellipse 82% 82% at 50% 50%,#000 72%,transparent 96%)}
+  -webkit-mask-image:radial-gradient(ellipse 100% 100% at 50% 50%,#000 84%,transparent 99%);
+  mask-image:radial-gradient(ellipse 100% 100% at 50% 50%,#000 84%,transparent 99%)}
 .lbl{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);text-align:center;white-space:nowrap;pointer-events:none}
 .lbl .nm{font-weight:800;font-size:19px;text-shadow:0 1px 2px rgba(247,246,243,.9)}
 .lbl .meta{font-size:12px;color:#20403a;text-shadow:0 1px 2px rgba(247,246,243,.9)}
@@ -197,11 +198,12 @@ async function build(){
   const xs=d.islands||[]; board.innerHTML="";
   let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
   xs.forEach((i,ix)=>{
-    const side=((i.size&&i.size.w)||DEFW)*SCALE;
+    const sw=(i.size&&i.size.w)||DEFW, sh=(i.size&&i.size.h)||1800;
+    const w=sw*SCALE, h=sh*SCALE; // same scale on both axes: correct aspect AND larger islands larger
     let c=POS[i.id]; if(!c){const a=-Math.PI/2+ix*2*Math.PI/Math.max(1,xs.length); c=[1000+640*Math.cos(a),620+440*Math.sin(a)];}
-    const left=c[0]-side/2, top=c[1]-side/2;
-    minx=Math.min(minx,left);miny=Math.min(miny,top);maxx=Math.max(maxx,left+side);maxy=Math.max(maxy,top+side);
-    const el=document.createElement("div"); el.className="isle"; el.style.cssText=`left:${left}px;top:${top}px;width:${side}px;height:${side}px`;
+    const left=c[0]-w/2, top=c[1]-h/2;
+    minx=Math.min(minx,left);miny=Math.min(miny,top);maxx=Math.max(maxx,left+w);maxy=Math.max(maxy,top+h);
+    const el=document.createElement("div"); el.className="isle"; el.style.cssText=`left:${left}px;top:${top}px;width:${w}px;height:${h}px`;
     el.innerHTML=`<img loading=lazy src="/snap/${encodeURIComponent(i.id)}.png?v=${Math.floor((i.lastSeen||0))}" alt="${esc(i.name)}" onerror="this.style.opacity=.25">`+
       `<div class=lbl><div class=nm>${i.pack==="capital"?"★ ":""}${esc(i.name)}</div>`+
       `<div class=meta><span class="dot ${i.live?"":"q"}"></span>${i.population||0} souls · day ${i.day||0} · ${esc(i.weather||"?")} · ${esc(KIND[i.pack]||i.pack)}</div></div>`;
