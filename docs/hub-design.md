@@ -97,8 +97,8 @@ The boundary is the whole point of the design. Keep it sharp.
 - The **registry / directory**: the authoritative list of islands (id, name, pack, url, harbors,
   liveness). This is the one thing genuinely global.
 - **Inter-island relations**: directed stance + policies between ordered island pairs
-  (ally/neutral/rival/enemy; embargo, tariff). No single island can be the source of truth for
-  "how A and B regard each other."
+  (ally/neutral/rival/enemy; friction, blockade, tariff). No single island can be the source of
+  truth for "how A and B regard each other."
 - **Mainland-as-actor state**: the prices the mainland pays, duties/taxes, edicts, pressure.
   Today "the mainland" is an infinite abstract buyer/seller inside each engine; the hub makes it
   one shared actor.
@@ -210,13 +210,14 @@ GET /relations/:from/:to            // e.g. /relations/kestrel/island
 -> 200 {
   stance: "rival",                   // ally | neutral | rival | enemy
   policy: {
-    embargo: false,                  // refuse this sibling's cargo/passengers
-    tariff: 0.15,                    // extra fraction taxed on crossings (0 = none)
-    passengersBlocked: false         // refuse people specifically (vs goods)
+    friction: 0.35,                  // 0..1 share of crossings turned back / cargo volume lost — leaky, not a wall
+    blockade: false,                 // the rare true hard stop (nothing crosses at all)
+    tariff: 0.15                     // extra fraction taxed on crossings (0 = none)
   },
   asOf: 1737, ttl: 60
 }
-// Hub absent / 404 / error -> treat as { stance:"neutral", policy:{embargo:false,tariff:0} }
+// Hub absent / 404 / error -> treat as { stance:"neutral", policy:{friction:0,blockade:false,tariff:0} }
+// Stance sets a default friction (neutral 0, rival 0.35, enemy 0.7, ally 0); an explicit friction overrides it.
 
 // Mainland policy the island's abstract-mainland code should apply.
 GET /mainland/:islandId
@@ -262,7 +263,7 @@ GET /world/islands
 GET /world/map
 -> 200 {
   islands: [ /* summaries as above, plus positions if the hub assigns them */ ],
-  relations: [ { from:"kestrel", to:"island", stance:"rival", embargo:false, tariff:0.15 } ],
+  relations: [ { from:"kestrel", to:"island", stance:"rival", friction:0.35, blockade:false, tariff:0.15 } ],
   conflicts: [ { id:"war7", a:"kestrel", b:"cairnhold", state:"active", since:1710 } ],
   mainland: { mood:"grasping", edicts:[ {id:"e12", text:"..."} ] },
   events: [ { id:"hur3", kind:"weather", islands:["island","kestrel"], untilDay:130 } ]
@@ -277,13 +278,16 @@ GET /world/islands/:id
 ### 5c. Admin / game-action endpoints (privileged; §16)
 
 ```jsonc
-// Set a directed relation and its policies.
+// Set a directed relation and its policies. Any omitted policy field is left unchanged.
 PUT /admin/relations/:from/:to     X-Hub-Admin: <token>
-Body: { stance:"enemy", policy:{ embargo:true, tariff:0.25, passengersBlocked:true } }
+Body: { stance:"enemy", policy:{ friction:0.7, blockade:false, tariff:0.25 } }
 -> 200 { ok:true }
+// Setting stance with no explicit friction adopts the stance's default friction
+// (neutral 0, rival 0.35, enemy 0.7, ally 0).
 
 // Convenience wrappers (thin sugar over the above).
-POST /admin/embargo   Body:{ from, to, on:true }
+POST /admin/embargo   Body:{ from, to, on:true }   // sugar: enemy stance + friction 0.7, blockade:false — HOSTILE BUT LEAKY (smugglers still get some through), NOT a wall. on:false -> neutral.
+POST /admin/blockade  Body:{ from, to, on:true }   // the rare true hard stop: nothing crosses. on:false lifts it.
 POST /admin/tariff    Body:{ from, to, rate:0.2 }
 
 // Mainland edicts / pressure.
@@ -320,21 +324,27 @@ interface IslandRecord {
   boat: { running: boolean; held: boolean };
   // optional, hub-assigned map layout (islands don't know their archipelago position)
   map?: { x: number; y: number };
+  // optional (v3, design only): which mainland power this island holds allegiance to — its patron
+  // / sphere of influence. Absent -> the single abstract mainland fallback applies (see §12).
+  allegiance?: string | null;    // a Mainland.id, e.g. "crown" | "republic"
 }
 
 type Stance = "ally" | "neutral" | "rival" | "enemy";
 
-// Directed: A→B may differ from B→A. Key is the ordered pair.
+// Directed: A→B may differ from B→A. Key is the ordered pair. One island being hostile does NOT
+// auto-set the reverse relation — no automatic reciprocation (see §8.1).
 interface Relation {
   from: string; to: string;
   stance: Stance;
   policy: {
-    embargo: boolean;            // refuse this sibling's cargo/passengers entirely
+    friction: number;            // 0..1 — the share of `from`→`to` crossings turned back / cargo volume lost. Leaky friction, not a wall: even at high friction some people and goods still get through.
+    blockade: boolean;           // the rare TRUE hard stop — nothing crosses at all
     tariff: number;              // 0..1 extra taxed on crossings from `from` toward `to`
-    passengersBlocked: boolean;  // block people but (maybe) not goods
   };
   updatedAt: number;
 }
+// Stance sets a default friction unless one is given explicitly:
+//   ally 0, neutral 0, rival 0.35, enemy 0.7.
 
 interface MainlandState {
   islandId: string | "*";        // per-island, or "*" for a world default
@@ -346,6 +356,23 @@ interface MainlandState {
   updatedAt: number;
 }
 interface MainlandEdict { id: string; text: string; item?: string; priceMultiplier?: number; untilDay?: number }
+
+// Optional (v3, design only): multiple named mainland POWERS, each its own actor. See §12.
+// A `Mainland` is keyed by its own id (not just "*"); islands hold an `allegiance` to one (above).
+// The single-abstract-mainland fallback stays when no Mainland is defined.
+interface Mainland {
+  id: string;                    // "crown" | "republic" | ... (the "*" default remains valid)
+  name: string;
+  // the same policy levers as MainlandState, but owned by the POWER, consulted via an island's allegiance
+  buys: boolean;
+  priceMultiplier: number;
+  duty: number;
+  edicts: MainlandEdict[];
+  mood?: string;
+  // bloc politics: how this power regards other powers — the spine of derived alliances/rivalries
+  relations?: { to: string; stance: Stance }[];   // power→power stance (proxy dynamics, see §12)
+  updatedAt: number;
+}
 
 interface Conflict {
   id: string;
@@ -392,35 +419,81 @@ exists it is advisory flavour for the map only; event windows should prefer wall
   `UW_HARBORS` list each island already has, and the web falls back to a static per-island URL
   index (§11). Adding an island then means editing configs, as today.
 
-## 8. Feature: enemies — stance / embargo / tariff
+## 8. Feature: enemies — stance / friction / blockade / tariff
 
-- **Hub stores:** `Relation` rows (directed pairs). Set via `PUT /admin/relations/:from/:to` or the
-  `embargo`/`tariff` sugar.
+Hostility is **leaky friction, not a wall.** A hostile border is costlier and riskier, not
+impossible: smugglers still get some goods through, and some people still cross. This keeps the
+feature on-thesis — **no bans, only consequences.** A relation therefore carries:
+
+- **`friction`** (0..1) — the share of crossings turned back / cargo volume lost. This is the main
+  lever. Even an enemy border leaks: at friction 0.7, roughly seven in ten crossings are turned
+  back and cargo is thinned to ~30%, but the rest slips through.
+- **`blockade`** (boolean) — the rare **true** hard stop, for when the operator really wants
+  *nothing* to cross. Reach for this deliberately; friction is the default expression of hostility.
+- **`tariff`** (0..1) — an extra fraction taxed on crossings (unchanged from before).
+
+**Stance sets a default friction** (neutral 0, rival 0.35, enemy 0.7, ally 0), which an explicit
+friction can override. So "enemy" is not a gate; it is heavy drag.
+
+- **Hub stores:** `Relation` rows (directed pairs) as `{ stance, policy:{friction, blockade,
+  tariff} }`. Set via `PUT /admin/relations/:from/:to`, or the sugar: `POST /admin/embargo` (enemy
+  stance + friction 0.7, leaky), `POST /admin/blockade` (the hard stop), `POST /admin/tariff`.
 - **Island pulls:** `GET /relations/:self/:sibling`, cached 60s, consulted at the crossing seams.
-- **Where it applies in real code:**
-  - **Passengers** — in `boatTo(passenger, to)` (`main.ts`). Before POSTing to the sibling's
-    `/api/boat/arrive`: if the pulled policy has `embargo` or `passengersBlocked`, return `false`
-    (the boat "did not sail"). The engine's `sail()` already handles a `false` from `onDepart`
-    gracefully — it refunds the `BOAT_FARE`, keeps the citizen on the pier, and emits
-    `boat.dock` ("The boat ... did not sail today"). So an embargo reuses an existing, tested code
-    path; the citizen simply can't leave for a rival.
-  - **Cargo** — in `sailCargo()` (`main.ts`), per harbor: if `embargo`, skip that harbor entirely
-    (don't even call `/api/boat/wants`). For a **tariff**, reduce what the shipping island books
-    from the crossing. Cleanest: after the sibling returns `taken`, apply the tariff to the
-    quantity/price passed to `town.ship(load, h.name)` — e.g. ship fewer units or a lower price so
-    the harbor/owner nets less. (`ship()` already takes the 10% harbor cut; the tariff is an
-    additional, hub-driven reduction layered on top, applied by the *sending* island honouring the
-    policy toward `to`.)
-  - **Arrivals from a rival** — the *receiving* island can also consult
-    `GET /relations/:self/:from` inside the `/api/boat/arrive` and `/api/boat/cargo` handlers and
-    refuse (respond 503/403) if it embargoes the sender. Because the crossing is authenticated by
-    `X-Boat` and the passenger carries `from`, the receiver knows who's knocking.
+- **Where it applies in real code (IMPLEMENTED in `apps/server/src/main.ts`):**
+  - **Passengers** — in `boatTo(passenger, to)`. Before POSTing to the sibling's
+    `/api/boat/arrive`, a `blockade` always turns the boat back; otherwise the crossing is turned
+    back **with probability `friction`** (`Math.random() < rel.friction`). Turning back returns
+    `false`, which reuses `sail()`'s already-tested "did not sail" path — the engine refunds the
+    `BOAT_FARE`, keeps the citizen on the pier, and emits `boat.dock` ("The boat ... did not sail
+    today"). Because it is probabilistic, **the citizen stays and may retry on a later day** and may
+    eventually slip across a leaky border; only a blockade makes leaving impossible.
+  - **Cargo** — in `sailCargo()`, per harbor: a `blockade` skips that harbor entirely (nothing
+    crosses). Otherwise `friction` **thins the load** rather than dropping it: each item's quantity
+    is scaled to `round(qty * (1 - friction))`, with a floor of **1 unit still smuggled** if any of
+    that item was wanted. So a hostile-but-not-blockaded lane still moves a trickle of goods. The
+    `tariff` is layered on top as a hub-driven reduction to what the sending island books from the
+    crossing (`ship()` already takes its 10% harbor cut; the tariff nets the harbor/owner less),
+    applied by the *sending* island honouring its policy toward `to`.
+  - **Arrivals from a rival** — the *receiving* island also consults `GET /relations/:self/:from`
+    inside its `/api/boat/arrive` handler and **probabilistically turns back the arrival** (respond
+    403) with probability `friction`, or always if it has a `blockade` toward the sender. Because
+    the crossing is authenticated by `X-Boat` and the passenger carries `from`, the receiver knows
+    who's knocking. This receiver-side check is what lets the *hostile side enforce at its own dock*
+    (see §8.1).
   - **Rumour/news colouring** — a rival stance can be attached as flavour: when a passenger does
-    arrive from a rival, the `boat.news` the engine already emits (`arrive()` emits
-    `boat.news`) can be prefixed/toned by the stance. This is optional polish, not core.
-- **Degrades:** no hub → `neutral`, no embargo, no tariff — i.e. today's fully-open mesh.
-  Crucially, **the two-island-no-hub floor is unaffected**: with no hub there are no relations to
-  honour.
+    arrive from a rival, the `boat.news` the engine already emits (`arrive()` emits `boat.news`) can
+    be prefixed/toned by the stance. This is optional polish, not core.
+- **Degrades:** no hub → `neutral`, friction 0, no blockade, no tariff — i.e. today's fully-open
+  mesh. Crucially, **the two-island-no-hub floor is unaffected**: with no hub there are no relations
+  to honour.
+
+### 8.1 Relations are directed, independent, and enforced at the hostile side's own dock
+
+Relations are **directed and independent**: A→B may differ from B→A, and one island being hostile
+does **not** auto-make the other hostile — **there is no automatic reciprocation.** An open island
+that keeps trading with a hostile neighbour is a valid, interesting state, not a bug to fix. The
+hub never mirrors a relation for you; if you want both sides hostile, you set both directions.
+
+The subtle part is that **each side enforces friction at its own dock**, in *both* travel
+directions:
+
+- On **departure**, the sending island applies its **outbound** friction toward the destination
+  (`boatTo`/`sailCargo` consult `self→dest`).
+- On **arrival**, the receiving island applies its **inbound** friction toward the origin — its own
+  `self→sender` relation, checked in `/api/boat/arrive`.
+
+Concretely, a traveller crossing **B→A** faces **two** independent throttles: **B's outbound
+friction (B→A)** at departure, and **A's inbound friction (A→B)** at arrival. The consequences:
+
+- **One-sided hostility still throttles the link in both travel directions** — because the hostile
+  island applies friction to *arrivals* as well as departures, at its own dock. If only A is
+  hostile toward B, then B's people trying to reach A are turned back at A's dock (A's inbound A→B
+  friction), even while B stays fully willing to send and receive. **A can keep B's people out even
+  if B is open.**
+- **If both sides set friction, it compounds** — a B→A crossing must survive B's outbound roll *and*
+  A's inbound roll, so two moderate frictions multiply into a much lower effective throughput.
+- Because friction is leaky, none of this is a wall: even mutual enemy-level friction leaves a thin,
+  costly, risky channel open — the smuggler's trade.
 
 ## 9. Feature: the overview map
 
@@ -497,7 +570,7 @@ are the books. The hub turns that abstraction into a controllable actor by feedi
 same code.
 
 - **Hub stores:** `MainlandState` per island (or `*`): `buys`, `priceMultiplier`, `duty`,
-  `edicts`.
+  `edicts`. (v3 generalizes this to N named `Mainland` powers — see §12.1.)
 - **Island pulls:** `GET /mainland/:self`, cached 60s, consulted where mainland trade happens.
 - **Where it applies in real code:**
   - **Export price** — `merchants()` and `sellToMainland()`/`ship(..., "the mainland")` currently
@@ -517,6 +590,37 @@ same code.
   economy remains auditable and the hub never mints coins itself — it only changes the *rate/price*
   at which the island's own code mints/burns.
 - **Degrades:** no hub → the current infinite buyer at pack prices, no duty. Exactly today.
+
+### 12.1 Multiple mainlands / power blocs (v3 — design only, NOT built)
+
+Phil raised the v3 question: *"Do we need 2 mainlands so there can be alliances?"* The recorded
+answer: **no, island-to-island alliances do not strictly require multiple mainlands.** An `ally`
+stance already gives zero/low friction (§8), so direct island alliances work today with a single
+abstract mainland. But **multiple named mainland POWERS are the natural way to structure alliances
+into BLOCS and give the meta-game a spine.** So this is *optional*, not required — and still purely
+an actor/consequence layer, on-thesis.
+
+The generalization (see the `Mainland` interface in §6):
+
+- **`MainlandState` (singular) → N `Mainland` records keyed by id.** Instead of only the abstract
+  `"*"` mainland, the hub can hold several named powers (e.g. `crown`, `republic`), each **its own
+  actor** with its own export prices, duties, edicts, and mood.
+- **Islands hold an `allegiance`** (a `Mainland.id` on `IslandRecord`) — a patron / sphere of
+  influence. `sellToMainland()` and export pricing would then consult **the island's patron
+  mainland's** policy (its `priceMultiplier`/`buys`/`duty`/edicts) instead of a single global one.
+  An island with no allegiance falls back to the abstract `"*"` mainland.
+- **Blocs emerge from shared vs opposing patrons.** Bloc-level alliances and rivalries can be
+  declared directly or **derived** from allegiance: islands sharing a patron tend toward allies;
+  islands under opposing powers tend toward rivals. Proxy dynamics fall out naturally — *an enemy of
+  my patron tends to be my rival* — and could seed default island→island frictions (§8) or feed the
+  map's bloc colouring. The hub only ever *proposes* such derived relations; islands still apply
+  them through the §8 machinery they choose to honour.
+- **Fallback unchanged / on-thesis.** With **no** `Mainland` defined, the **single-abstract-mainland
+  fallback remains**: an infinite buyer at pack export prices, exactly as today. Multiple mainlands
+  add an actor and consequences; they never become a dependency, and the hub still mints no coins.
+
+This is v3 design only — the `Mainland` record, allegiance, and bloc derivation are **not
+implemented.** The shipped mainland layer is still the single `MainlandState` sketch above.
 
 ## 13. Feature: cross-island social (deferred, but this is its home)
 
@@ -682,7 +786,7 @@ never manufactures guilt.
 
 ### 14.5 Consequences: per-person notices and cat-and-mouse
 
-- A hub **wanted notice** is a **per-person embargo**, distinct from the per-island embargo of §8.
+- A hub **wanted notice** is a **per-person refusal**, distinct from the per-island friction/blockade of §8.
   An island that has opted into hub law enforcement pulls the wanted list and **may** refuse a
   flagged arrival, or arrest on arrival (deliver them straight to a hearing), or do nothing —
   island's choice. Refusal reuses the existing `onDepart===false` / `/api/boat/arrive` 503 path
@@ -727,7 +831,7 @@ seed provocateur ─▶ he acts (or diverts) ─▶ island perceives deeds ─�
                                                    ▼                         ▼
                                         other islands hear slowly     opted-in islands may refuse/
                                         (boat speed, patchy)          arrest on arrival (per-person
-                                                                      embargo), map/Gazette update
+                                                                      refusal), map/Gazette update
    HUB ABSENT: the entire right column vanishes. No dossier, no wanted list, no cross-island
    correlation. Reputation travels ONLY by boat/rumour; each island suspects on its own record.
    The two-island-no-hub floor is unchanged.
@@ -881,9 +985,11 @@ unlike the islands' own records.
 - **Stale data:** pulls are cached with a TTL; an island may honour a slightly out-of-date stance
   or price. Acceptable — meta-game state need not be instantaneous. Never block a `tick()` on a
   live hub call.
-- **Split brain / partial connectivity:** island A can reach the hub, B can't. A honours a new
-  embargo, B doesn't yet. This is self-healing: B picks it up on its next successful pull. Directed
-  relations make this tolerable (each island only ever needs *its own* outbound policy). Effects
+- **Split brain / partial connectivity:** island A can reach the hub, B can't. A honours new
+  friction/a blockade, B doesn't yet. This is self-healing: B picks it up on its next successful
+  pull. Directed relations make this tolerable (each island only ever pulls relations where it is
+  the `from` — the same self-keyed rows it enforces at departure and at its own arrival dock).
+  Effects
   that must be symmetric (military) are queued per-island with ack, so a temporarily-disconnected
   island applies its share when it reconnects — nothing is lost, nothing double-applies.
 - **Hub sends bad/hostile data:** validate and clamp every pulled value (zod schemas, bounded
@@ -904,22 +1010,29 @@ Each phase is independently shippable and leaves the no-hub floor intact.
   fallback (Model B) documented.
 - **Value:** add islands freely; one world door; overview map. Zero risk to the sim.
 
-### Hub v2 — diplomacy (relations + embargo/tariff)
-- **Hub:** `Relation` store; `GET /relations/:from/:to`; `PUT /admin/relations/:from/:to` +
-  embargo/tariff sugar.
-- **Island:** pull stance in `boatTo()` (block/allow passengers — reuses `sail()`'s existing
-  `onDepart===false` path) and in `sailCargo()` (skip harbor on embargo; reduce booked crossing on
-  tariff); optionally consult relations in the `/api/boat/arrive`/`/api/boat/cargo` handlers to
-  refuse rivals. Cache 60s; neutral fallback.
-- **Web:** relation edges on the map; admin controls to set stance.
+### Hub v2 — diplomacy (relations: friction / blockade / tariff)
+- **Hub:** `Relation` store with `policy:{friction, blockade, tariff}` and stance-default frictions;
+  `GET /relations/:from/:to`; `PUT /admin/relations/:from/:to` + `embargo` (enemy + friction 0.7,
+  leaky), `blockade` (hard stop), and `tariff` sugar.
+- **Island:** pull stance in `boatTo()` (probabilistically turn back the crossing with probability
+  `friction`, or always on `blockade` — reuses `sail()`'s existing `onDepart===false` path so the
+  citizen stays and may retry) and in `sailCargo()` (skip harbor on `blockade`; thin the load by
+  `friction`, ≥1 unit still smuggled; apply `tariff`); the receiver also consults its own
+  `self→sender` relation in `/api/boat/arrive` and probabilistically turns back rival arrivals, so
+  the hostile side enforces at its own dock (§8.1). Cache 60s; neutral/open fallback.
+- **Web:** relation edges on the map (weighted by friction, blockade flagged); admin controls to set
+  stance/friction/blockade/tariff.
 
-### Hub v3 — mainland as actor
+### Hub v3 — mainland as actor (+ multiple mainlands / allegiance / blocs)
 - **Hub:** `MainlandState` store; `GET /mainland/:islandId`; `PUT /admin/mainland/:islandId` +
-  edict endpoint.
+  edict endpoint. **Optionally** generalize to N named `Mainland` powers keyed by id, an
+  island→mainland `allegiance`, and bloc-level alliances/rivalries derived from shared vs opposing
+  patrons (§12.1) — the single-abstract-mainland fallback stays when no `Mainland` is defined.
 - **Island:** pull mainland policy; apply `priceMultiplier`/`buys`/`duty` in `merchants()`,
-  `sellToMainland()`/`ship(..., "the mainland")`, and optionally `tourism()`. All through existing
+  `sellToMainland()`/`ship(..., "the mainland")`, and optionally `tourism()` — consulting the
+  island's patron mainland when allegiance/multiple mainlands are in play. All through existing
   `minted`/`burned` bookkeeping; pack prices as fallback.
-- **Web:** mainland mood/edict banner on the map; admin edict controls.
+- **Web:** mainland mood/edict banner on the map; bloc colouring by allegiance; admin edict controls.
 
 ### Hub v4 — military + coordinated events + cross-island social
 - **Hub:** `Conflict` + `WorldEvent` stores; `GET /conflicts/:islandId` + ack; `GET
@@ -938,7 +1051,7 @@ Each phase is independently shippable and leaves the no-hub floor intact.
 - **Island (all opt-in, no-op without `UW_HUB_URL`):** forward arrival/departure events; compute a
   local per-person suspicion score off its own event record + arrival times; drive the existing
   `accuse → hearing → verdict` path from suspicion; report verdicts; consult `/wanted` in the
-  `/api/boat/arrive` handler and **optionally** refuse/arrest (per-person embargo, reusing §8's
+  `/api/boat/arrive` handler and **optionally** refuse/arrest (per-person refusal, reusing §8's
   refusal path). Every step degrades to boat/rumour-only when the hub is absent.
 - **Web:** a "most wanted" board; a person's cross-island dossier panel; provocateur outcomes
   surfaced in the Gazette/map. This is the payoff phase for the "seed a person, read what they
