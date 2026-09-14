@@ -105,6 +105,7 @@ export const VINEHAVEN: WorldPack = {
   ],
   feasts: [{ name: "the vintage feast", month: 9, day: 21, place: "market" }, { name: "the harvest supper", month: 10, day: 12, place: "square" }, { name: "the golden night", month: 6, day: 24, place: "terracewalk" }],
   supply: [
+    { from: "harbor", to: "boatyard", item: "timber", qty: 4, price: 2, upTo: 12 },
     // grapes to the press, olives to the oil press, flax to the dye house, grain to the mill
     { from: "vineyard", to: "winepress", item: "grapes", qty: 6, price: 1, upTo: 12 }, { from: "highvines", to: "winepress", item: "grapes", qty: 4, price: 1, upTo: 12 },
     { from: "grove", to: "olivepress", item: "olives", qty: 5, price: 1, upTo: 10 }, { from: "fields", to: "weaver", item: "flax", qty: 4, price: 1, upTo: 10 },

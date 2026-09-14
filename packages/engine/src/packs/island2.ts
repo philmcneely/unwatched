@@ -80,6 +80,7 @@ export const KESTREL: WorldPack = {
   ],
   feasts: [{ name: "the kestrel run", month: 5, day: 12, place: "harbor" }, { name: "the salt fair", month: 8, day: 30, place: "market" }, { name: "the light's night", month: 11, day: 2, place: "lighthouse" }],
   supply: [
+    { from: "harbor", to: "boatyard", item: "timber", qty: 4, price: 2, upTo: 12 },
     { from: "fishhouse", to: "market", item: "fish", qty: 6, price: 1, upTo: 10 }, { from: "fishhouse", to: "inn", item: "fish", qty: 4, price: 1, upTo: 8 },
     { from: "fishhouse", to: "smokehouse", item: "fish", qty: 6, price: 1, upTo: 8 }, { from: "fishhouse", to: "fishmonger", item: "fish", qty: 4, price: 1, upTo: 8 },
     { from: "smokehouse", to: "market", item: "smoked fish", qty: 4, price: 2, upTo: 6 }, { from: "smokehouse", to: "fishmonger", item: "smoked fish", qty: 3, price: 2, upTo: 6 },

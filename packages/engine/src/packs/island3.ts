@@ -104,6 +104,7 @@ export const CAIRNHOLD: WorldPack = {
   ],
   feasts: [{ name: "the founders' cairn", month: 6, day: 18, place: "market" }, { name: "the miners' rest", month: 9, day: 2, place: "market" }, { name: "the midwinter coal-fire", month: 12, day: 20, place: "harbor" }],
   supply: [
+    { from: "harbor", to: "boatyard", item: "timber", qty: 4, price: 2, upTo: 12 },
     // the six o'clock cart: ore and coal to the foundry, iron to the smithy, food to the shelves
     { from: "ironadit", to: "foundry", item: "ore", qty: 4, price: 2, upTo: 8 }, { from: "orewash", to: "foundry", item: "ore", qty: 2, price: 2, upTo: 8 },
     { from: "coalpit", to: "foundry", item: "coal", qty: 4, price: 2, upTo: 8 }, { from: "charcoal", to: "foundry", item: "coal", qty: 2, price: 2, upTo: 8 },

@@ -84,7 +84,7 @@ export const ISLAND: WorldPack = {
     { place: "mill", makes: "flour", qty: 6, needs: { item: "grain", qty: 6 } },
     { place: "bakery", makes: "bread", qty: 24, needs: { item: "flour", qty: 2 } },
     { place: "fishhouse", makes: "fish", qty: 12 }, { place: "orchard", makes: "apples", qty: 5, seasons: ["summer", "autumn"] }, { place: "orchard", makes: "apples", qty: 1, seasons: ["spring"] },
-    { place: "pinewood", makes: "timber", qty: 3 }, { place: "sawpit", makes: "planks", qty: 4, needs: { item: "timber", qty: 4 } },
+    { place: "pinewood", makes: "timber", qty: 8 }, { place: "sawpit", makes: "planks", qty: 4, needs: { item: "timber", qty: 4 } },
     { place: "boatyard", makes: "boat", qty: 1, needs: { item: "planks", qty: 6 } },
     { place: "smithy", makes: "nails", qty: 2 }, { place: "quarry", makes: "stone", qty: 2 },
     // the counters: the inn's pot needs fish, the tavern draws what it sells, the chandlery splices and decants
