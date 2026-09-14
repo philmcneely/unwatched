@@ -30,7 +30,8 @@ describe("the boat between islands", () => {
     expect(south.events.some((e) => e.kind === "agent.leave" && /for Northreach/.test(e.text))).toBe(true);
     const arrived = [...north.agents.values()].find((x) => x.persona.name === "Vera Lučić")!;
     expect(arrived).toBeTruthy();
-    expect(arrived.coins).toBe(27); expect(arrived.inventory).toContain("rope"); expect(arrived.owner).toBe("o1");
+    // she paid the 2-coin boat fare on the way out, so she arrives with 25 (fare routing to the harbor is asserted precisely in the tests below)
+    expect(arrived.coins).toBe(25); expect(arrived.inventory).toContain("rope"); expect(arrived.owner).toBe("o1");
     expect(arrived.memory.some((m) => m.text.includes("Rosa cheated me"))).toBe(true);
     expect(arrived.memory.some((m) => m.text.includes("came here from The island"))).toBe(true);
     expect(north.events.some((e) => e.kind === "boat.news" && /mill roof/.test(e.text))).toBe(true);
@@ -42,6 +43,33 @@ describe("the boat between islands", () => {
     await north.tick();
     expect(north.agents.has(arrived.id)).toBe(true);
     expect(north.events.some((e) => /did not sail today/.test(e.text))).toBe(true);
+    // the boat never sailed, so her fare was refunded — she is no poorer for the try
+    expect(arrived.coins).toBe(25);
     void MINUTES_PER_DAY;
+  });
+
+  it("routes the boat fare to whoever owns the harbor", async () => {
+    // one island, no federation: the plain 'leave' still runs a boat, and its fare goes to the harbor's owner
+    const town = new Town({ seed: 3, brain: none, minutesPerTick: 1, name: "The island", idPrefix: "solo" });
+    const keeper = town.addAgent({ persona: persona("Harbor Keeper"), owner: "o0" });
+    town.places.get("harbor")!.owner = keeper.id; // the keeper runs the quay
+    const traveller = town.addAgent({ persona: persona("Wanderer"), owner: "o2" });
+    traveller.coins = 10; traveller.location = "harbor";
+    town.t = 9 * 60; town.weather = "clear"; // 09:00, fair weather — the boat runs; no economy ticks, so the till moves only by the fare
+    const keeperBefore = keeper.coins;
+    expect(town.apply(traveller, { kind: "leave", why: "off to see the world" }, "test")).toBe(true);
+    expect(town.agents.has(traveller.id)).toBe(false); // they left
+    expect(keeper.coins).toBe(keeperBefore + 2); // the fare reached the harbor's owner
+  });
+
+  it("never strands a broke traveller: the fare is capped at what they carry", async () => {
+    const town = new Town({ seed: 4, brain: none, minutesPerTick: 1, name: "The island", idPrefix: "broke" });
+    const pauper = town.addAgent({ persona: persona("Pauper"), owner: "o3" });
+    pauper.coins = 1; pauper.location = "harbor"; // less than the 2-coin fare
+    town.t = 9 * 60; town.weather = "clear";
+    const tillBefore = town.places.get("harbor")!.treasury;
+    expect(town.apply(pauper, { kind: "leave", why: "nothing here" }, "test")).toBe(true);
+    expect(town.agents.has(pauper.id)).toBe(false); // still allowed to go
+    expect(town.places.get("harbor")!.treasury).toBe(tillBefore + 1); // paid only the 1 coin they had
   });
 });

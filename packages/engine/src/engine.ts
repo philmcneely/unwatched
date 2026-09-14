@@ -53,6 +53,9 @@ const WEATHERS = ["clear", "clear", "clear", "rain", "rain", "wind", "fog", "sto
 /** Work that happens under the sky: the weather takes its share of what these places make. */
 const OUTDOOR_WORK = new Set(["fishhouse", "fields", "orchard", "quarry", "pinewood", "sawpit"]);
 
+/** A boat ride is not free: the traveller pays this, and it goes to whoever runs the harbor — its owner, or its own till if no one owns it. Capped at what the traveller carries, so being broke never strands anyone. */
+const BOAT_FARE = 2;
+
 export class Town {
   /** Minimum interval for routine NPC thoughts only; paid entitlements and urgent decisions are unaffected. */
   npcThoughtInterval = 0;
@@ -917,6 +920,7 @@ export class Town {
       case "leave": {
         const harbor = action.to ? this.harbors.find((h) => h.id === action.to || h.name.toLowerCase() === action.to!.toLowerCase() || h.name.toLowerCase().includes(action.to!.toLowerCase())) : null;
         if (harbor && this.onDepart) { this.sailing.push({ a, to: harbor.id, why: action.why ?? null }); return true; } // the crossing happens at the end of the minute
+        const fare = Math.min(BOAT_FARE, a.coins); a.coins -= fare; this.landFare(fare); // the boat off the island is not free either
         this.emit("agent.leave", [a.id], "harbor", `${name} boarded the boat and left the island${action.why ? `: “${action.why}”` : "."}`, 0.9, { why: action.why ?? null });
         for (const w of this.nearby(a)) this.remember(w, `${name} left on the boat${action.why ? `, saying "${action.why}"` : ""}.`, 0.7, "rumor");
         this.removeAgent(a.id, "left", action.why ?? "");
@@ -1296,14 +1300,24 @@ export class Town {
     for (const { a, to, why } of queue) {
       if (!this.agents.has(a.id)) continue;
       const harbor = this.harbors.find((h) => h.id === to)!; const name = a.persona.name;
+      const fare = Math.min(BOAT_FARE, a.coins); a.coins -= fare; // paid up front so the traveller arrives with what's left; refunded below if the boat can't sail
       let ok = false;
       try { ok = await this.onDepart!(this.passengerOf(a, why), to); } catch (err) { this.log(`boat to ${to} failed: ${(err as Error).message}`); }
-      if (!ok) { this.emit("boat.dock", [a.id], "harbor", `The boat to ${harbor.name} did not sail today. ${name} stayed on the pier.`, 0.4); this.remember(a, `The boat to ${harbor.name} did not sail. Tomorrow, maybe.`, 0.6); continue; }
+      if (!ok) { a.coins += fare; this.emit("boat.dock", [a.id], "harbor", `The boat to ${harbor.name} did not sail today. ${name} stayed on the pier.`, 0.4); this.remember(a, `The boat to ${harbor.name} did not sail. Tomorrow, maybe.`, 0.6); continue; }
+      this.landFare(fare);
       this.emit("agent.leave", [a.id], "harbor", `${name} boarded the boat for ${harbor.name}${why ? `: “${why}”` : "."}`, 0.9, { why, to });
       for (const w of this.nearby(a)) this.remember(w, `${name} left on the boat for ${harbor.name}${why ? `, saying "${why}"` : ""}.`, 0.7, "rumor");
       this.removeAgent(a.id, "left", `For ${harbor.name}.${why ? ` ${why}` : ""}`);
     }
   }
+  /** A collected fare lands in the harbor's purse: its owner's if someone runs it, otherwise the harbor's own till. The traveller has already been debited by the caller. */
+  private landFare(fare: number): void {
+    if (fare <= 0) return;
+    const harbor = this.places.get("harbor"); if (!harbor) return;
+    const o = harbor.owner ? this.agents.get(harbor.owner) : null;
+    if (o) o.coins += fare; else harbor.treasury += fare;
+  }
+
   /** Someone steps off the boat from another island, with what they carry and what they remember. The news they bring becomes rumor. */
   arrive(p: Passenger): AgentState {
     const a = this.addAgent({ persona: p.persona, owner: p.owner, funded: true, coins: p.coins });
