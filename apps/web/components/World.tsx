@@ -36,7 +36,7 @@ import townStyle from "./town/town.module.css";
 const C = { ...GROUND, shell: CREAM, sage: SAGE, teal: TEAL, kelp: KELP, coral: CORAL, drift: DRIFT };
 
 type PlaceView = { decorations?: Decoration[]; community?: CommunityView; hasHistory?: boolean; id: string; name: string; kind: string; exits: string[]; x: number; y: number; district: string; sprite: string; stock?: Record<string, number>; look?: string; owner: string | null; site: { what: string; name: string; by: string; done: number; of: number } | null; crowd: number };
-type TownView = Clock & { size: { w: number; h: number }; places: PlaceView[] };
+type TownView = Clock & { id?: string; name?: string; size: { w: number; h: number }; places: PlaceView[] };
 
 
 /** Trees, rocks and props laid by district so the island reads as a landscape and not a diagram. Positions are map units. */
@@ -155,14 +155,21 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       // the island: a soft blob, big enough that every district has shore or hill behind it. Its outline is one smooth curve;
       // the shallows and the foam follow it, the wet sand sits inside it, and the tiles stop just short of it.
       const cx = W / 2, cy = H / 2 + 40, Rx = W / 2 - 120, Ry = H / 2 - 100;
-      const wobble = (a: number) => 1 + 0.14 * Math.sin(a * 3 + 0.7) + 0.08 * Math.cos(a * 5 + 2);
+      // Each island gets its OWN coastline, seeded from its id/name, so no two look alike — different lobes, bays and headlands.
+      const seedStr = String(townView.id ?? townView.name ?? "island");
+      let _h = 2166136261; for (let _i = 0; _i < seedStr.length; _i++) { _h ^= seedStr.charCodeAt(_i); _h = Math.imul(_h, 16777619); }
+      let _s = _h >>> 0; const rnd = () => { _s = (_s + 0x6D2B79F5) | 0; let t = Math.imul(_s ^ (_s >>> 15), 1 | _s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+      const w1 = 0.09 + rnd() * 0.11, f1 = 2 + Math.floor(rnd() * 3), p1 = rnd() * 6.283;
+      const w2 = 0.05 + rnd() * 0.09, f2 = 4 + Math.floor(rnd() * 4), p2 = rnd() * 6.283;
+      const w3 = 0.03 + rnd() * 0.07, f3 = 1 + Math.floor(rnd() * 2), p3 = rnd() * 6.283;
+      const wobble = (a: number) => 1 + w1 * Math.sin(a * f1 + p1) + w2 * Math.cos(a * f2 + p2) + w3 * Math.sin(a * f3 + p3);
       const inside = (x: number, y: number): number => { const a = Math.atan2((y - cy) / Ry, (x - cx) / Rx); return Math.hypot((x - cx) / (Rx * wobble(a)), (y - cy) / (Ry * wobble(a))); }; // 1 is the shore
       const outline = (t: number): [number, number][] => { const pts: [number, number][] = []; for (let k = 0; k < 240; k++) { const a = (k / 240) * Math.PI * 2; const r = wobble(a) * t; pts.push([cx + Rx * r * Math.cos(a), cy + Ry * r * Math.sin(a)]); } return pts; };
       const poly = (g: Graphics, pts: [number, number][]) => { g.moveTo(pts[0]![0], pts[0]![1]); for (const [x, y] of pts.slice(1)) g.lineTo(x, y); g.closePath(); return g; };
       // the horizon: other islands, far off, as soft silhouettes on the sea; the sun crosses over them by day
       const horizon = new Graphics(); world.addChild(horizon);
       const ISLETS: [number, number, number, number][] = [[cx + Rx * 0.95, cy - Ry * 1.1, 190, 34], [cx - Rx * 0.9, cy - Ry * 1.12, 150, 28], [cx - Rx * 1.1, cy + Ry * 0.75, 200, 36], [cx + Rx * 1.12, cy + Ry * 0.6, 130, 26], [cx + Rx * 0.35, cy - Ry * 1.2, 110, 22]];
-      for (const [ix, iy, iw, ih] of ISLETS) { horizon.ellipse(ix, iy + 2, iw * 1.12, ih * 0.7).fill({ color: C.shallow, alpha: 0.9 }); horizon.moveTo(ix - iw, iy).quadraticCurveTo(ix - iw * 0.5, iy - ih, ix - iw * 0.1, iy - ih * 0.6).quadraticCurveTo(ix + iw * 0.3, iy - ih * 1.1, ix + iw, iy).closePath().fill(0xa9bfb8); horizon.moveTo(ix - iw * 0.6, iy - 2).quadraticCurveTo(ix - iw * 0.2, iy - ih * 0.8, ix + iw * 0.2, iy - 4).stroke({ width: 1.2, color: C.kelp, alpha: 0.18 }); }
+      for (const [ix, iy, iw, ih] of (shot ? [] : ISLETS)) { horizon.ellipse(ix, iy + 2, iw * 1.12, ih * 0.7).fill({ color: C.shallow, alpha: 0.9 }); horizon.moveTo(ix - iw, iy).quadraticCurveTo(ix - iw * 0.5, iy - ih, ix - iw * 0.1, iy - ih * 0.6).quadraticCurveTo(ix + iw * 0.3, iy - ih * 1.1, ix + iw, iy).closePath().fill(0xa9bfb8); horizon.moveTo(ix - iw * 0.6, iy - 2).quadraticCurveTo(ix - iw * 0.2, iy - ih * 0.8, ix + iw * 0.2, iy - 4).stroke({ width: 1.2, color: C.kelp, alpha: 0.18 }); }
       const celestial = new Graphics(); world.addChild(celestial);
       const gather = (p: PlaceView) => ({ x: p.x - 110, y: p.y + 40, w: 220 });
       const OLD_TOWN = ["market", "lane", "council", "chapel", "bakery", "smithy", "tavern", "chandlery"];
