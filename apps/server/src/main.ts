@@ -389,7 +389,7 @@ app.get("/api/town", (c) => c.json({ ...clockOf(town), name: TOWN_NAME, id: TOWN
  * A compact self-descriptor for an optional coordinator hub (and for a spectator island-picker). The hub seam:
  * an island advertises who it is and who it boats to; it never depends on a hub to run. See docs/hub-design.md.
  */
-app.get("/api/island", (c) => c.json({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, day: town.day, weather: town.weather, population: town.agents.size, harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }));
+app.get("/api/island", (c) => c.json({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, size: PACK.size, day: town.day, weather: town.weather, population: town.agents.size, harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }));
 /** Children of the island who could be adopted: unowned, growing up or already grown. Adopting means writing to them; nothing more. */
 app.get("/api/children", (c) => c.json({
   growing: town.children.filter((ch) => !ch.adoptedBy).map(childView),
@@ -830,7 +830,7 @@ async function hubPost(path: string, body: unknown): Promise<void> {
   } catch (err) { log(`hub ${path}: ${(err as Error).message}`); } // a hub that is down changes nothing about the island
 }
 // identity + topology (rarely changes); live state (day/weather/economy) for the overview map
-const registerWithHub = () => hubPost("/islands", { id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: ISLAND_URL, harbors: HARBORS.map((h) => ({ id: h.id, url: h.url })) });
+const registerWithHub = () => hubPost("/islands", { id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: ISLAND_URL, size: PACK.size, harbors: HARBORS.map((h) => ({ id: h.id, url: h.url })) });
 const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
 if (HUB_URL) {
   log(`registering with hub at ${HUB_URL}`);
