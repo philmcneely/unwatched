@@ -78,21 +78,23 @@ const HUB_URL = (process.env.UW_HUB_URL ?? "").trim().replace(/\/$/, ""); // the
 const HUB_SECRET = process.env.UW_HUB_SECRET ?? "";
 const ISLAND_URL = (process.env.UW_ISLAND_URL ?? SITE_URL).replace(/\/$/, ""); // this island's public address, for the hub's directory
 const hubHeaders = { "Content-Type": "application/json", ...(HUB_SECRET ? { "X-Hub": HUB_SECRET } : {}) };
-type Policy = { stance: string; embargo: boolean; tariff: number; passengersBlocked: boolean };
-const OPEN: Policy = { stance: "neutral", embargo: false, tariff: 0, passengersBlocked: false };
+// Hostility is FRICTION (a drag), not a wall: even enemies leak — some cargo is smuggled through,
+// some people still cross. `friction` (0..1) is the share of crossings turned back / volume lost;
+// only `blockade` is a true hard stop. Relations are DIRECTED, so A→B can differ from B→A.
+type Policy = { stance: string; friction: number; blockade: boolean; tariff: number };
+const OPEN: Policy = { stance: "neutral", friction: 0, blockade: false, tariff: 0 };
 const relStats = new Map<string, { at: number; policy: Policy }>();
-/** This island's outbound stance toward a sibling, per the hub. Cached 60s; any hub blip falls back to open — a crossing is NEVER blocked by hub trouble, only by a real embargo. */
 async function hubRelation(to: string): Promise<Policy> {
   if (!HUB_URL) return OPEN;
   const hit = relStats.get(to); if (hit && Date.now() - hit.at < 60000) return hit.policy;
   try {
     const res = await fetch(`${HUB_URL}/relations/${encodeURIComponent(TOWN_ID)}/${encodeURIComponent(to)}`, { headers: hubHeaders, signal: AbortSignal.timeout(4000) });
     if (res.ok) {
-      const d = (await res.json()) as { stance?: string; policy?: { embargo?: boolean; tariff?: number; passengersBlocked?: boolean } };
-      const p: Policy = { stance: d.stance ?? "neutral", embargo: !!d.policy?.embargo, tariff: Math.max(0, Math.min(1, Number(d.policy?.tariff) || 0)), passengersBlocked: !!d.policy?.passengersBlocked };
+      const d = (await res.json()) as { stance?: string; policy?: { friction?: number; blockade?: boolean; tariff?: number } };
+      const p: Policy = { stance: d.stance ?? "neutral", friction: Math.max(0, Math.min(1, Number(d.policy?.friction) || 0)), blockade: !!d.policy?.blockade, tariff: Math.max(0, Math.min(1, Number(d.policy?.tariff) || 0)) };
       relStats.set(to, { at: Date.now(), policy: p }); return p;
     }
-  } catch { /* fall through to open */ }
+  } catch { /* fall through to open — a hub blip never blocks a crossing */ }
   relStats.set(to, { at: Date.now(), policy: OPEN }); return OPEN;
 }
 
@@ -106,7 +108,8 @@ async function harborTown(h: { id: string; url: string }): Promise<Record<string
 async function boatTo(passenger: Passenger, to: string): Promise<boolean> {
   const h = HARBORS.find((x) => x.id === to); if (!h) return false;
   const rel = await hubRelation(to);
-  if (rel.embargo || rel.passengersBlocked) { log(`boat to ${h.id}: refused (${rel.stance} stance)`); return false; } // reuses sail()'s tested "did not sail" path — fare refunded, citizen stays
+  // a blockade is a hard stop; friction is a drag — some days the crossing is turned back, some days a traveller slips through
+  if (rel.blockade || (rel.friction > 0 && Math.random() < rel.friction)) { log(`boat to ${h.id}: turned back (${rel.stance}${rel.blockade ? ", blockade" : `, friction ${rel.friction}`})`); return false; } // reuses sail()'s tested "did not sail" path — fare refunded, citizen stays and may try again
   try {
     const res = await fetch(`${h.url}/api/boat/arrive`, { method: "POST", headers: { "Content-Type": "application/json", "X-Boat": BOAT_SECRET }, body: JSON.stringify(passenger), signal: AbortSignal.timeout(10000) });
     if (!res.ok) { log(`boat to ${h.id}: ${res.status} ${(await res.text()).slice(0, 120)}`); return false; }
@@ -355,11 +358,12 @@ async function sailCargo(): Promise<void> {
   for (const h of HARBORS) {
     try {
       const rel = await hubRelation(h.id);
-      if (rel.embargo) continue; // an embargo skips a rival's harbor entirely — no cargo crosses
+      if (rel.blockade) continue; // a true blockade: nothing crosses
       const offers = town.cargoOffers(); if (!offers.length) return;
       const res = await fetch(`${h.url}/api/boat/wants`, { headers: { "X-Boat": BOAT_SECRET }, signal: AbortSignal.timeout(8000) }); if (!res.ok) continue;
       const { wants } = (await res.json()) as { wants: { item: string; qty: number }[] };
-      const load = offers.flatMap((o) => { const w = wants.find((x) => x.item === o.item); return w ? [{ ...o, qty: Math.min(o.qty, w.qty) }] : []; }); if (!load.length) continue;
+      // friction thins the load — only what slips past the hostility crosses (at least 1 unit gets smuggled if any was wanted)
+      const load = offers.flatMap((o) => { const w = wants.find((x) => x.item === o.item); if (!w) return []; const qty = Math.min(o.qty, w.qty); const got = rel.friction > 0 ? Math.max(1, Math.round(qty * (1 - rel.friction))) : qty; return got > 0 ? [{ ...o, qty: got }] : []; }); if (!load.length) continue;
       const sent = await fetch(`${h.url}/api/boat/cargo`, { method: "POST", headers: { "Content-Type": "application/json", "X-Boat": BOAT_SECRET }, body: JSON.stringify({ from: TOWN_NAME, items: load.map(({ item, qty, price }) => ({ item, qty, price })) }), signal: AbortSignal.timeout(8000) });
       if (!sent.ok) continue;
       const { taken } = (await sent.json()) as { taken: { item: string; qty: number }[] };
@@ -372,7 +376,7 @@ app.post("/api/boat/arrive", async (c) => {
   if (!BOAT_SECRET || c.req.header("x-boat") !== BOAT_SECRET) return c.json({ error: "this harbor takes no boats from there" }, 403);
   if (!town.boatRunning) return c.json({ error: town.boatHeld ? "the boat is held" : "no crossing in this storm" }, 503);
   const body = Passenger.safeParse(await c.req.json().catch(() => null)); if (!body.success) return c.json({ error: body.error.issues[0]?.message ?? "bad manifest" }, 400);
-  const rel = await hubRelation(body.data.from.id); if (rel.embargo || rel.passengersBlocked) return c.json({ error: "this harbor is closed to that island" }, 403); // defense in depth: refuse a rival even if the sender ignored the embargo
+  const rel = await hubRelation(body.data.from.id); if (rel.blockade || (rel.friction > 0 && Math.random() < rel.friction)) return c.json({ error: "this harbor turned the boat back" }, 403); // the hostile side enforces at its own dock too, so one-sided hostility still throttles the link — but friction is leaky, so some arrivals still get through
   const a = town.arrive(body.data); billing.applyPlan(a); void deepen(a); // the depth comes in their first minutes, not before they board
   if (store) await store.snapshot(town);
   return c.json({ ok: true, id: a.id, island: TOWN_NAME });

@@ -24,6 +24,10 @@ ADMIN_TOKEN = os.environ.get("HUB_ADMIN_TOKEN", "")  # separate, stronger cred f
 DB_PATH = os.environ.get("HUB_DB", "/data/hub.db")
 LIVE_SEC = int(os.environ.get("HUB_LIVE_SEC", "360"))
 STANCES = ("ally", "neutral", "rival", "enemy")
+# Hostility is FRICTION, not a wall (docs/hub-design.md §8): even enemies leak — some cargo is
+# smuggled through, some people still cross. A stance sets a default drag (0..1 = the share of
+# crossings turned back / the volume lost); only an explicit `blockade` is a true hard stop.
+STANCE_FRICTION = {"ally": 0.0, "neutral": 0.0, "rival": 0.35, "enemy": 0.7}
 
 _lock = threading.Lock()
 
@@ -43,8 +47,14 @@ def init_db():
             minted INTEGER, burned INTEGER, flour_shortage INTEGER,
             mayor TEXT, boat TEXT, map_x REAL, map_y REAL, updated_at REAL )""")
         c.execute("""CREATE TABLE IF NOT EXISTS relations (
-            from_id TEXT, to_id TEXT, stance TEXT, embargo INTEGER, tariff REAL,
-            passengers_blocked INTEGER, updated_at REAL, PRIMARY KEY (from_id, to_id) )""")
+            from_id TEXT, to_id TEXT, stance TEXT, friction REAL, blockade INTEGER,
+            tariff REAL, updated_at REAL, PRIMARY KEY (from_id, to_id) )""")
+        # migrate older dbs that had embargo/passengers_blocked instead of friction/blockade
+        cols = {r[1] for r in c.execute("PRAGMA table_info(relations)")}
+        if "friction" not in cols:
+            c.execute("ALTER TABLE relations ADD COLUMN friction REAL DEFAULT 0")
+        if "blockade" not in cols:
+            c.execute("ALTER TABLE relations ADD COLUMN blockade INTEGER DEFAULT 0")
 
 
 def now():
@@ -100,23 +110,27 @@ def get_relation(frm, to):
     with db() as c:
         r = c.execute("SELECT * FROM relations WHERE from_id=? AND to_id=?", (frm, to)).fetchone()
     if not r:
-        return {"stance": "neutral", "policy": {"embargo": False, "tariff": 0.0, "passengersBlocked": False}}
-    return {"stance": r["stance"], "policy": {"embargo": bool(r["embargo"]),
-            "tariff": float(r["tariff"] or 0.0), "passengersBlocked": bool(r["passengers_blocked"])}}
+        return {"stance": "neutral", "policy": {"friction": 0.0, "blockade": False, "tariff": 0.0}}
+    return {"stance": r["stance"], "policy": {"friction": float(r["friction"] or 0.0),
+            "blockade": bool(r["blockade"]), "tariff": float(r["tariff"] or 0.0)}}
 
 
-def set_relation(frm, to, stance=None, embargo=None, tariff=None, passengers_blocked=None):
+def set_relation(frm, to, stance=None, friction=None, blockade=None, tariff=None):
     cur = get_relation(frm, to)  # start from whatever's there (or the neutral default) and layer changes
     st = stance if stance in STANCES else cur["stance"]
-    emb = cur["policy"]["embargo"] if embargo is None else bool(embargo)
+    # if the stance changed and no explicit friction was given, take the stance's default drag
+    if friction is None:
+        fr = STANCE_FRICTION[st] if (stance in STANCES and stance != cur["stance"]) else cur["policy"]["friction"]
+    else:
+        fr = max(0.0, min(1.0, float(friction)))
+    bl = cur["policy"]["blockade"] if blockade is None else bool(blockade)
     tar = cur["policy"]["tariff"] if tariff is None else max(0.0, min(1.0, float(tariff)))
-    pb = cur["policy"]["passengersBlocked"] if passengers_blocked is None else bool(passengers_blocked)
     with _lock, db() as c:
-        c.execute("""INSERT INTO relations (from_id,to_id,stance,embargo,tariff,passengers_blocked,updated_at)
+        c.execute("""INSERT INTO relations (from_id,to_id,stance,friction,blockade,tariff,updated_at)
             VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(from_id,to_id) DO UPDATE SET stance=excluded.stance, embargo=excluded.embargo,
-              tariff=excluded.tariff, passengers_blocked=excluded.passengers_blocked, updated_at=excluded.updated_at""",
-            (frm, to, st, 1 if emb else 0, tar, 1 if pb else 0, now()))
+            ON CONFLICT(from_id,to_id) DO UPDATE SET stance=excluded.stance, friction=excluded.friction,
+              blockade=excluded.blockade, tariff=excluded.tariff, updated_at=excluded.updated_at""",
+            (frm, to, st, fr, 1 if bl else 0, tar, now()))
     return get_relation(frm, to)
 
 
@@ -124,8 +138,8 @@ def all_relations():
     with db() as c:
         rows = c.execute("SELECT * FROM relations ORDER BY from_id, to_id")
         return [{"from": r["from_id"], "to": r["to_id"], "stance": r["stance"],
-                 "embargo": bool(r["embargo"]), "tariff": float(r["tariff"] or 0.0),
-                 "passengersBlocked": bool(r["passengers_blocked"])} for r in rows]
+                 "friction": float(r["friction"] or 0.0), "blockade": bool(r["blockade"]),
+                 "tariff": float(r["tariff"] or 0.0)} for r in rows]
 
 
 def world_map():
@@ -254,11 +268,16 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/admin/"):
             if not self._admin_ok():
                 return self._send(403, {"error": "admin disabled or bad X-Hub-Admin token"})
-            if p == "/admin/embargo":  # {from,to,on}
+            if p == "/admin/embargo":  # {from,to,on} — hostility as heavy FRICTION (leaky), not a wall
                 if not b.get("from") or not b.get("to"):
                     return self._send(400, {"error": "from and to required"})
-                st = "enemy" if b.get("on", True) else "neutral"
-                return self._send(200, {"ok": True, "relation": set_relation(b["from"], b["to"], stance=st, embargo=bool(b.get("on", True)))})
+                on = bool(b.get("on", True))
+                st = "enemy" if on else "neutral"
+                return self._send(200, {"ok": True, "relation": set_relation(b["from"], b["to"], stance=st, friction=STANCE_FRICTION[st], blockade=False)})
+            if p == "/admin/blockade":  # {from,to,on} — a true hard stop (nothing crosses)
+                if not b.get("from") or not b.get("to"):
+                    return self._send(400, {"error": "from and to required"})
+                return self._send(200, {"ok": True, "relation": set_relation(b["from"], b["to"], blockade=bool(b.get("on", True)))})
             if p == "/admin/tariff":  # {from,to,rate}
                 if not b.get("from") or not b.get("to"):
                     return self._send(400, {"error": "from and to required"})
@@ -287,12 +306,12 @@ class H(BaseHTTPRequestHandler):
             b = self._body()
         except Exception:
             return self._send(400, {"error": "bad json"})
-        m = re.match(r"^/admin/relations/([^/]+)/([^/]+)$", p)  # {stance, policy:{embargo,tariff,passengersBlocked}}
+        m = re.match(r"^/admin/relations/([^/]+)/([^/]+)$", p)  # {stance, policy:{friction,blockade,tariff}}
         if m:
             pol = b.get("policy", {})
             rel = set_relation(m.group(1), m.group(2), stance=b.get("stance"),
-                               embargo=pol.get("embargo"), tariff=pol.get("tariff"),
-                               passengers_blocked=pol.get("passengersBlocked"))
+                               friction=pol.get("friction"), blockade=pol.get("blockade"),
+                               tariff=pol.get("tariff"))
             return self._send(200, {"ok": True, "relation": rel})
         return self._send(404, {"error": "not found"})
 
