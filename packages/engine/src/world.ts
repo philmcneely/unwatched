@@ -2,11 +2,15 @@ import type { Place, Job } from "./types.ts";
 import type { AgentId } from "@unwatched/protocol";
 import { ISLAND, type WorldPack } from "./packs/island.ts";
 import { KESTREL } from "./packs/island2.ts";
+import { CAIRNHOLD } from "./packs/island3.ts";
+import { VINEHAVEN } from "./packs/island4.ts";
 
 export { ISLAND } from "./packs/island.ts";
 export { KESTREL } from "./packs/island2.ts";
+export { CAIRNHOLD } from "./packs/island3.ts";
+export { VINEHAVEN } from "./packs/island4.ts";
 /** Every world pack by id, so an instance can pick one with UW_PACK (default: island). */
-export const PACKS: Record<string, WorldPack> = { island: ISLAND, kestrel: KESTREL };
+export const PACKS: Record<string, WorldPack> = { island: ISLAND, kestrel: KESTREL, cairnhold: CAIRNHOLD, vinehaven: VINEHAVEN };
 export type { WorldPack, PlaceSpec, JobSpec, ProduceSpec, SupplySpec, ExportSpec, FeastSpec } from "./packs/island.ts";
 
 /** The island, from a world pack. Roads run both ways; unowned businesses start with their float in the till. */
