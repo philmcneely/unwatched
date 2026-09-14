@@ -275,10 +275,10 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       let trees: Container[] = [];
       const plantTrees = () => {
         for (const t of trees) t.destroy({ children: true }); trees = [];
-        for (const d of decor) { if (!/tree|bush|olive|cypress/.test(d.sprite)) continue; const sp = put(d.sprite, d.x, d.y, d.w, d.flip); if (!sp) continue; const sh = new Graphics(); sh.ellipse(d.w ? d.w * 0.12 : 8, 3, d.sprite === "tree-large" ? 40 : d.sprite === "bush" ? 12 : 26, d.sprite === "tree-large" ? 12 : d.sprite === "bush" ? 4 : 8).fill({ color: C.kelp, alpha: 0.09 }); sp.addChildAt(sh, 0); trees.push(sp); }
+        for (const d of decor) { if (!/tree|bush|olive|cypress/.test(d.sprite)) continue; if (inside(d.x, d.y) > 0.98) continue; /* vegetation only on land, never in the sea */ const sp = put(d.sprite, d.x, d.y, d.w, d.flip); if (!sp) continue; const sh = new Graphics(); sh.ellipse(d.w ? d.w * 0.12 : 8, 3, d.sprite === "tree-large" ? 40 : d.sprite === "bush" ? 12 : 26, d.sprite === "tree-large" ? 12 : d.sprite === "bush" ? 4 : 8).fill({ color: C.kelp, alpha: 0.09 }); sp.addChildAt(sh, 0); trees.push(sp); }
       };
       setSeason(forcedSeason ?? clockRef.current?.season ?? townView.season ?? "summer");
-      for (const d of decor) { if (/tree|bush|olive|cypress/.test(d.sprite)) continue; put(d.sprite, d.x, d.y, d.w, d.flip); }
+      for (const d of decor) { if (/tree|bush|olive|cypress/.test(d.sprite)) continue; const shoreOk = /pier|rowboat|searocks|net|crates|barrel|rock/.test(d.sprite); if (!shoreOk && inside(d.x, d.y) > 1.0) continue; /* land props stay on land; only shore props may sit at the water */ put(d.sprite, d.x, d.y, d.w, d.flip); }
       plantTrees();
       const SEASON_CAST: Record<string, number> = { winter: 0xeaf0f0, spring: 0xffffff, summer: 0xfbf2dc, autumn: 0xf7e9d2 };
       // wet ground darkens the island under the rain; snow settles on it and melts again
