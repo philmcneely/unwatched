@@ -790,14 +790,23 @@ app.get("/api/health", (c) => c.json({ ok: true, version: process.env.RELEASE_VE
 // This is only the discovery seam; the hub itself (registry, diplomacy, map, mainland, military) is designed in docs/hub-design.md.
 const HUB_URL = (process.env.UW_HUB_URL ?? "").trim().replace(/\/$/, "");
 const HUB_SECRET = process.env.UW_HUB_SECRET ?? "";
-async function registerWithHub(): Promise<void> {
+const ISLAND_URL = (process.env.UW_ISLAND_URL ?? SITE_URL).replace(/\/$/, ""); // this island's own public address, for the hub's directory
+const hubHeaders = { "Content-Type": "application/json", ...(HUB_SECRET ? { "X-Hub": HUB_SECRET } : {}) };
+async function hubPost(path: string, body: unknown): Promise<void> {
   if (!HUB_URL) return;
   try {
-    const res = await fetch(`${HUB_URL}/register`, { method: "POST", headers: { "Content-Type": "application/json", ...(HUB_SECRET ? { "X-Hub": HUB_SECRET } : {}) }, body: JSON.stringify({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, day: town.day, weather: town.weather, population: town.agents.size, harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }), signal: AbortSignal.timeout(5000) });
-    if (!res.ok) log(`hub register: ${res.status}`);
-  } catch (err) { log(`hub register: ${(err as Error).message}`); } // a hub that is down changes nothing about the island
+    const res = await fetch(`${HUB_URL}${path}`, { method: "POST", headers: hubHeaders, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+    if (!res.ok) log(`hub ${path}: ${res.status}`);
+  } catch (err) { log(`hub ${path}: ${(err as Error).message}`); } // a hub that is down changes nothing about the island
 }
-if (HUB_URL) { log(`registering with hub at ${HUB_URL}`); void registerWithHub(); setInterval(() => void registerWithHub(), 120000); }
+// identity + topology (rarely changes); live state (day/weather/economy) for the overview map
+const registerWithHub = () => hubPost("/islands", { id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: ISLAND_URL, harbors: HARBORS.map((h) => ({ id: h.id, url: h.url })) });
+const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
+if (HUB_URL) {
+  log(`registering with hub at ${HUB_URL}`);
+  void registerWithHub().then(reportState);
+  setInterval(() => { void registerWithHub().then(reportState); }, 120000); // best-effort heartbeat; never on the tick's critical path
+}
 
 // ---- WebSocket stream ----
 const server = serve({ fetch: app.fetch, port: PORT, createServer }, () => log(`listening on http://localhost:${PORT}`));
