@@ -21,7 +21,8 @@ export const VINEHAVEN: WorldPack = {
   id: "vinehaven", name: "Vinehaven", size: { w: 3000, h: 1800 },
   places: [
     // The Landing — the little harbor where flour comes in and wine goes out
-    P("harbor", "the sun landing", "harbor", "the landing", "harbor-office", 500, 1300, ["inn", "cellars", "boatshed", "coast", "market"]),
+    P("harbor", "the sun landing", "harbor", "the landing", "harbor-office", 500, 1300, ["inn", "cellars", "boatshed", "coast", "market", "boatyard"]),
+    P("boatyard", "the boatyard", "workplace", "the landing", "sawpit", 300, 1180, ["harbor"], { sells: [{ item: "boat", base: 8 }], stock: { boat: 1, timber: 4 } }),
     P("inn", "the Vine & Fig inn", "inn", "the landing", "inn", 780, 1160, ["harbor", "market"], { sells: [{ item: "soup", base: 2 }, { item: "bread", base: 1 }, { item: "wine", base: 2 }], beds: { price: 4, capacity: 6 }, stock: { soup: 8, bread: 4, figs: 6, wine: 6 } }),
     P("cellars", "the harbor cellars", "shop", "the landing", "chandlery", 820, 1420, ["harbor", "market"], { sells: [{ item: "wine", base: 2 }, { item: "oil", base: 2 }, { item: "lamp oil", base: 2 }], beds: { price: 3, capacity: 1 }, stock: { wine: 12, oil: 8, "lamp oil": 6 } }),
     P("boatshed", "the boat shed", "home", "the landing", "boatshed", 360, 1440, ["harbor"], { beds: { price: 0, capacity: 8 } }),
@@ -40,13 +41,12 @@ export const VINEHAVEN: WorldPack = {
     P("square", "the fountain square", "public", "old town", "well", 1420, 1400, ["market", "tavern", "sq-1"]),
     P("sq-1", "a plot off the square", "plot", "old town", "plot", 1300, 1560, ["square"]),
     // The Vineyard Terraces — sun-terraced vines, the press, and the villas
-    P("terracewalk", "the terrace walk", "public", "terraces", "lamp", 1980, 1300, ["market", "coast", "vineyard", "highvines", "winepress", "villa", "cottage", "terr-1", "grovewalk"]),
+    P("terracewalk", "the terrace walk", "public", "terraces", "lamp", 1980, 1300, ["market", "coast", "vineyard", "highvines", "winepress", "villa", "cottage", "grovewalk"]),
     P("vineyard", "the Sunterrace vineyard", "workplace", "terraces", "orchard", 2200, 1500, ["terracewalk", "winepress"], { sells: [{ item: "grapes", base: 1 }], stock: { grapes: 20 } }),
     P("highvines", "the high vines", "workplace", "terraces", "orchard", 2460, 1440, ["terracewalk", "vineyard"], { sells: [{ item: "grapes", base: 1 }], stock: { grapes: 14 } }),
     P("winepress", "the wine press", "workplace", "terraces", "mill", 2260, 1220, ["terracewalk", "vineyard"], { sells: [{ item: "wine", base: 2 }], stock: { wine: 16, grapes: 12 } }),
     P("villa", "the terrace villa", "home", "terraces", "inn", 2020, 1520, ["terracewalk"], { beds: { price: 2, capacity: 4 } }),
     P("cottage", "the vine cottages", "home", "terraces", "boatshed", 2500, 1220, ["terracewalk"], { beds: { price: 1, capacity: 6 } }),
-    P("terr-1", "a plot on the low terrace", "plot", "terraces", "plot", 2160, 1620, ["terracewalk"]),
     // The Orchard Groves — olives and figs, the oil press, and the apiary
     P("grovewalk", "the grove path", "public", "groves", "bench", 2000, 780, ["terracewalk", "grove", "figgrove", "olivepress", "apiary", "grov-1", "hillroad"]),
     P("grove", "the olive grove", "workplace", "groves", "orchard", 2240, 620, ["grovewalk", "olivepress"], { sells: [{ item: "olives", base: 1 }, { item: "figs", base: 1 }], stock: { olives: 22, figs: 10 } }),
@@ -65,6 +65,8 @@ export const VINEHAVEN: WorldPack = {
     { id: "bakery.cook", title: "cook at the bakery", place: "bakery", wage: 3, hours: [6, 12], slots: 2 },
     { id: "inn.help", title: "help at the inn", place: "inn", wage: 2, hours: [8, 16], slots: 2 },
     { id: "harbor.dock", title: "dock hand", place: "harbor", wage: 2, hours: [6, 12], slots: 2 },
+    { id: "harbor.ferry", title: "ferryman", place: "harbor", wage: 3, hours: [6, 14], slots: 2 },
+    { id: "boatyard.wright", title: "shipwright", place: "boatyard", wage: 3, hours: [8, 16], slots: 1 },
     { id: "cellars.clerk", title: "clerk at the cellars", place: "cellars", wage: 2, hours: [9, 17], slots: 1 },
     { id: "tavern.keep", title: "tavern keeper's help", place: "tavern", wage: 2, hours: [16, 23], slots: 1 },
     { id: "weaver.hand", title: "weaver at the dye house", place: "weaver", wage: 3, hours: [8, 16], slots: 2 },
@@ -78,7 +80,7 @@ export const VINEHAVEN: WorldPack = {
     { id: "fields.hand", title: "field hand", place: "fields", wage: 2, hours: [7, 15], slots: 3 },
     { id: "mill.hand", title: "mill hand", place: "mill", wage: 3, hours: [7, 14], slots: 1 },
   ],
-  float: { inn: 60, market: 20, bakery: 40, cellars: 40, harbor: 40, tavern: 30, weaver: 40, vineyard: 40, highvines: 30, winepress: 50, grove: 40, figgrove: 30, olivepress: 50, apiary: 30, fields: 30, mill: 30 },
+  float: { inn: 60, market: 20, bakery: 40, cellars: 40, harbor: 40, boatyard: 40, tavern: 30, weaver: 40, vineyard: 40, highvines: 30, winepress: 50, grove: 40, figgrove: 30, olivepress: 50, apiary: 30, fields: 30, mill: 30 },
   produce: [
     // the vines: grapes ripen in the long warm months, thinning to almost nothing in winter
     { place: "vineyard", makes: "grapes", qty: 6, seasons: ["summer", "autumn"] }, { place: "vineyard", makes: "grapes", qty: 2, seasons: ["spring"] }, { place: "vineyard", makes: "grapes", qty: 1, seasons: ["winter"] },
@@ -98,6 +100,8 @@ export const VINEHAVEN: WorldPack = {
     // the table: bread from imported flour, the inn's fig-and-honey pottage, the tavern's pour
     { place: "bakery", makes: "bread", qty: 16, needs: { item: "flour", qty: 2 } },
     { place: "inn", makes: "soup", qty: 8, needs: { item: "figs", qty: 2 } },
+    // the boatyard: timber-poor, so a hull eats imported timber the boat brings back
+    { place: "boatyard", makes: "boat", qty: 1, needs: { item: "timber", qty: 4 } },
   ],
   feasts: [{ name: "the vintage feast", month: 9, day: 21, place: "market" }, { name: "the harvest supper", month: 10, day: 12, place: "square" }, { name: "the golden night", month: 6, day: 24, place: "terracewalk" }],
   supply: [
@@ -118,5 +122,6 @@ export const VINEHAVEN: WorldPack = {
   exports: [
     { item: "wine", price: 4, keep: 12 }, { item: "oil", price: 3, keep: 8 }, { item: "honey", price: 3, keep: 6 }, { item: "cloth", price: 3, keep: 8 },
     { item: "figs", price: 1, keep: 12 }, { item: "olives", price: 1, keep: 12 }, { item: "grapes", price: 1, keep: 12 },
+    { item: "boat", price: 10, keep: 0 },
   ],
 };

@@ -29,6 +29,7 @@ export const CAIRNHOLD: WorldPack = {
     P("boatshed", "the boat shed", "home", "the landing", "boatshed", 400, 1440, ["harbor"], { beds: { price: 0, capacity: 8 } }),
     P("fishhouse", "the fish house", "workplace", "the landing", "fishhouse", 300, 1040, ["harbor"], { sells: [{ item: "fish", base: 1 }], stock: { fish: 8 } }),
     P("orewash", "the ore-washing shed", "workplace", "the landing", "fishhouse", 700, 1460, ["harbor", "haul"], { stock: { ore: 8 } }),
+    P("boatyard", "the boatyard", "workplace", "the landing", "sawpit", 560, 1560, ["harbor"], { sells: [{ item: "boat", base: 10 }], stock: { timber: 6, boat: 1 } }),
     // Cairn town
     P("market", "the market square", "market", "cairn town", "stall", 1180, 1160, ["harbor", "inn", "bakery", "tavern", "council", "chapel", "smithy", "wynd", "haul", "fells", "store", "ironmonger"], { sells: [{ item: "bread", base: 1 }, { item: "fish", base: 1 }, { item: "tools", base: 4 }], stock: { bread: 8, fish: 4, tools: 3 } }),
     P("store", "the provisioner", "shop", "cairn town", "chandlery", 1380, 1020, ["market"], { sells: [{ item: "bread", base: 1 }, { item: "fish", base: 1 }, { item: "lamp oil", base: 2 }], stock: { bread: 8, fish: 4, "lamp oil": 6 } }),
@@ -38,9 +39,8 @@ export const CAIRNHOLD: WorldPack = {
     P("council", "the council house", "civic", "cairn town", "council", 1500, 900, ["market", "chapel"]),
     P("chapel", "the kirk", "public", "cairn town", "chapel", 1780, 820, ["market", "council", "fells"]),
     P("smithy", "the smithy", "workplace", "cairn town", "smithy", 940, 900, ["market"], { sells: [{ item: "nails", base: 2 }, { item: "tools", base: 4 }], stock: { nails: 10, tools: 4, iron: 6 } }),
-    P("wynd", "Miners' Wynd", "public", "cairn town", "lamp", 1400, 1440, ["market", "tavern", "wynd-1", "wynd-2", "rows"]),
+    P("wynd", "Miners' Wynd", "public", "cairn town", "lamp", 1400, 1440, ["market", "tavern", "wynd-1", "rows"]),
     P("wynd-1", "an empty lot on the wynd", "plot", "cairn town", "plot", 1280, 1560, ["wynd"]),
-    P("wynd-2", "the corner lot on the wynd", "plot", "cairn town", "plot", 1580, 1540, ["wynd"]),
     // The miners' rows
     P("rows", "the miners' rows", "public", "the rows", "well", 1150, 1520, ["wynd", "row-1", "row-2", "cot-1"]),
     P("row-1", "a cottage on the rows", "home", "the rows", "boatshed", 1000, 1600, ["rows"], { beds: { price: 1, capacity: 4 } }),
@@ -74,6 +74,8 @@ export const CAIRNHOLD: WorldPack = {
     { id: "bakery.cook", title: "cook at the bakery", place: "bakery", wage: 3, hours: [6, 12], slots: 1 },
     { id: "inn.help", title: "help at the inn", place: "inn", wage: 2, hours: [8, 16], slots: 2 },
     { id: "harbor.dock", title: "dock hand", place: "harbor", wage: 2, hours: [6, 12], slots: 2 },
+    { id: "harbor.ferry", title: "ferryman", place: "harbor", wage: 3, hours: [6, 14], slots: 2 },
+    { id: "boatyard.wright", title: "shipwright", place: "boatyard", wage: 3, hours: [8, 16], slots: 1 },
     { id: "chandlery.clerk", title: "clerk at the chandlery", place: "chandlery", wage: 2, hours: [9, 17], slots: 1 },
     { id: "store.keep", title: "shopkeeper at the provisioner", place: "store", wage: 2, hours: [9, 17], slots: 1 },
     { id: "ironmonger.clerk", title: "clerk at the ironmonger", place: "ironmonger", wage: 2, hours: [9, 17], slots: 1 },
@@ -81,7 +83,7 @@ export const CAIRNHOLD: WorldPack = {
     { id: "fields.hand", title: "field hand", place: "fields", wage: 2, hours: [7, 14], slots: 2 },
     { id: "fishhouse.gutter", title: "fish gutter", place: "fishhouse", wage: 2, hours: [5, 11], slots: 1 },
   ],
-  float: { inn: 60, market: 20, bakery: 40, smithy: 40, foundry: 50, ironadit: 30, coalpit: 30, quarry: 30, charcoal: 30, orewash: 30, chandlery: 30, store: 40, ironmonger: 40, tavern: 30, fields: 30, fishhouse: 30, harbor: 40 },
+  float: { inn: 60, market: 20, bakery: 40, smithy: 40, foundry: 50, ironadit: 30, coalpit: 30, quarry: 30, charcoal: 30, orewash: 30, chandlery: 30, store: 40, ironmonger: 40, tavern: 30, fields: 30, fishhouse: 30, boatyard: 40, harbor: 40 },
   produce: [
     // the hill's wealth: rock, ore and coal, all year, most of it for the boat
     { place: "quarry", makes: "stone", qty: 4 },
@@ -94,6 +96,8 @@ export const CAIRNHOLD: WorldPack = {
     { place: "fields", makes: "grain", qty: 2, seasons: ["summer", "autumn"] }, { place: "fields", makes: "grain", qty: 1, seasons: ["spring"] },
     { place: "bakery", makes: "bread", qty: 12, needs: { item: "flour", qty: 1 } },
     { place: "fishhouse", makes: "fish", qty: 4 },
+    // a boat now and then; the hill has no wood, so each hull waits on timber off the ferry
+    { place: "boatyard", makes: "boat", qty: 1, needs: { item: "timber", qty: 4 } },
     // the counters: the inn's pot, the tavern's tap, the chandlery's rope and oil
     { place: "inn", makes: "soup", qty: 8, needs: { item: "fish", qty: 2 } }, { place: "tavern", makes: "drink", qty: 4 },
     { place: "chandlery", makes: "rope", qty: 1 }, { place: "chandlery", makes: "lamp oil", qty: 1 },
@@ -114,5 +118,6 @@ export const CAIRNHOLD: WorldPack = {
   exports: [
     { item: "stone", price: 2, keep: 12 }, { item: "ore", price: 2, keep: 12 }, { item: "coal", price: 2, keep: 12 },
     { item: "iron", price: 3, keep: 12 }, { item: "nails", price: 2, keep: 8 }, { item: "tools", price: 4, keep: 8 },
+    { item: "boat", price: 10, keep: 0 },
   ],
 };

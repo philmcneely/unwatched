@@ -22,7 +22,8 @@ export const ISLAND: WorldPack = {
   id: "island", name: "The island", size: { w: 3000, h: 1800 },
   places: [
     // Harbor
-    P("harbor", "the harbor", "harbor", "harbor", "harbor-office", 560, 1180, ["inn", "market", "chandlery", "boatshed", "fishhouse", "coast"]),
+    P("harbor", "the harbor", "harbor", "harbor", "harbor-office", 560, 1180, ["inn", "market", "chandlery", "boatshed", "fishhouse", "coast", "boatyard"]),
+    P("boatyard", "the boatyard", "workplace", "harbor", "sawpit", 760, 1440, ["harbor"], { stock: { planks: 6 } }),
     P("inn", "the harbor inn", "inn", "harbor", "inn", 820, 1020, ["harbor", "market"], { sells: [{ item: "soup", base: 2 }, { item: "bread", base: 1 }], beds: { price: 4, capacity: 6 } , stock: { bread: 6, soup: 8, fish: 4 } }),
     P("chandlery", "the chandlery", "shop", "harbor", "chandlery", 880, 1280, ["harbor", "market"], { sells: [{ item: "rope", base: 3 }, { item: "lamp oil", base: 2 }], beds: { price: 3, capacity: 1 } }),
     P("boatshed", "the boat shed", "home", "harbor", "boatshed", 420, 1400, ["harbor"], { beds: { price: 0, capacity: 8 } }),
@@ -71,8 +72,10 @@ export const ISLAND: WorldPack = {
     { id: "pinewood.cutter", title: "woodcutter", place: "pinewood", wage: 3, hours: [7, 15], slots: 2 },
     { id: "sawpit.sawyer", title: "sawyer", place: "sawpit", wage: 3, hours: [8, 16], slots: 1 },
     { id: "quarry.hand", title: "quarryman", place: "quarry", wage: 3, hours: [7, 14], slots: 2 },
+    { id: "boatyard.wright", title: "shipwright", place: "boatyard", wage: 3, hours: [8, 16], slots: 2 },
+    { id: "harbor.ferry", title: "ferryman", place: "harbor", wage: 3, hours: [6, 14], slots: 2 },
   ],
-  float: { inn: 60, bakery: 40, fields: 40, mill: 40, harbor: 40, chandlery: 30, tavern: 30, fishhouse: 30, smithy: 30, orchard: 30, pinewood: 30, sawpit: 30, quarry: 30, market: 20 },
+  float: { inn: 60, bakery: 40, fields: 40, mill: 40, harbor: 40, chandlery: 30, tavern: 30, fishhouse: 30, smithy: 30, orchard: 30, pinewood: 30, sawpit: 30, quarry: 30, market: 20, boatyard: 50 },
   // a shift makes something; the mill and the bakery and the sawpit make theirs out of someone else's
   produce: [
     { place: "fields", makes: "grain", qty: 6, seasons: ["summer", "autumn"] }, { place: "fields", makes: "grain", qty: 3, seasons: ["spring"] }, { place: "fields", makes: "grain", qty: 1, seasons: ["winter"] },
@@ -82,6 +85,7 @@ export const ISLAND: WorldPack = {
     { place: "bakery", makes: "bread", qty: 24, needs: { item: "flour", qty: 2 } },
     { place: "fishhouse", makes: "fish", qty: 12 }, { place: "orchard", makes: "apples", qty: 5, seasons: ["summer", "autumn"] }, { place: "orchard", makes: "apples", qty: 1, seasons: ["spring"] },
     { place: "pinewood", makes: "timber", qty: 3 }, { place: "sawpit", makes: "planks", qty: 4, needs: { item: "timber", qty: 4 } },
+    { place: "boatyard", makes: "boat", qty: 1, needs: { item: "planks", qty: 6 } },
     { place: "smithy", makes: "nails", qty: 2 }, { place: "quarry", makes: "stone", qty: 2 },
     // the counters: the inn's pot needs fish, the tavern draws what it sells, the chandlery splices and decants
     { place: "inn", makes: "soup", qty: 8, needs: { item: "fish", qty: 2 } }, { place: "tavern", makes: "drink", qty: 4 },
@@ -95,10 +99,12 @@ export const ISLAND: WorldPack = {
     { from: "bakery", to: "market", item: "bread", qty: 8, price: 1, upTo: 10 }, { from: "bakery", to: "inn", item: "bread", qty: 4, price: 1, upTo: 6 },
     { from: "orchard", to: "market", item: "apples", qty: 5, price: 1, upTo: 8 }, { from: "fishhouse", to: "market", item: "fish", qty: 5, price: 1, upTo: 8 },
     { from: "pinewood", to: "sawpit", item: "timber", qty: 4, price: 2, upTo: 8 }, { from: "fishhouse", to: "inn", item: "fish", qty: 4, price: 1, upTo: 8 },
+    { from: "sawpit", to: "boatyard", item: "planks", qty: 6, price: 3, upTo: 12 },
   ],
   // the morning boat takes the surplus to the mainland; this is where the island's coins come from
   exports: [
     { item: "grain", price: 1, keep: 60 }, { item: "flour", price: 2, keep: 24 }, { item: "bread", price: 1, keep: 12 }, { item: "fish", price: 1, keep: 12 }, { item: "apples", price: 1, keep: 12 },
     { item: "lavender", price: 3, keep: 0 }, { item: "timber", price: 2, keep: 12 }, { item: "planks", price: 3, keep: 24 }, { item: "nails", price: 2, keep: 8 }, { item: "stone", price: 2, keep: 8 },
+    { item: "boat", price: 12, keep: 0 },
   ],
 };

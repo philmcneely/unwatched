@@ -29,6 +29,8 @@ export const KESTREL: WorldPack = {
     P("netloft", "the net loft", "shop", "quay", "chandlery", 240, 1200, ["boatshed"], { sells: [{ item: "rope", base: 3 }, { item: "lamp oil", base: 2 }], beds: { price: 3, capacity: 1 }, stock: { rope: 8, "lamp oil": 6 } }),
     P("smokehouse", "the smokehouse", "workplace", "quay", "smithy", 620, 1300, ["market"], { sells: [{ item: "smoked fish", base: 2 }], stock: { "smoked fish": 8, fish: 4 } }),
     P("boatshed", "the boat shed", "home", "quay", "boatshed", 320, 1320, [], { beds: { price: 0, capacity: 8 } }),
+    // the isle wants boats badly but has no wood of its own — the yard runs on imported timber
+    P("boatyard", "the boatyard", "workplace", "quay", "sawpit", 660, 1180, ["harbor"], { stock: { timber: 6 } }),
     // The town — the market, the shops, the trades, and the homes round the green.
     P("market", "the fish market", "market", "town", "stall", 1080, 1000, ["fishmonger", "drygoods", "bakery", "tavern", "chapel", "saltpan", "green"], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }, { item: "bread", base: 1 }], stock: { fish: 10, "smoked fish": 6, bread: 6 } }),
     P("fishmonger", "the fishmonger", "shop", "town", "fishhouse", 900, 1140, [], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }], stock: { fish: 8, "smoked fish": 6 } }),
@@ -51,6 +53,8 @@ export const KESTREL: WorldPack = {
   jobs: [
     { id: "fishhouse.gutter", title: "fish gutter", place: "fishhouse", wage: 2, hours: [5, 11], slots: 3 },
     { id: "smokehouse.smoker", title: "smoker", place: "smokehouse", wage: 3, hours: [7, 15], slots: 2 },
+    { id: "boatyard.wright", title: "shipwright", place: "boatyard", wage: 3, hours: [8, 16], slots: 1 },
+    { id: "harbor.ferry", title: "ferryman", place: "harbor", wage: 3, hours: [6, 14], slots: 2 },
     { id: "netloft.mender", title: "net mender", place: "netloft", wage: 2, hours: [9, 16], slots: 1 },
     { id: "fishmonger.clerk", title: "clerk at the fishmonger", place: "fishmonger", wage: 2, hours: [8, 15], slots: 1 },
     { id: "drygoods.clerk", title: "clerk at the dry store", place: "drygoods", wage: 2, hours: [9, 17], slots: 1 },
@@ -62,7 +66,7 @@ export const KESTREL: WorldPack = {
     { id: "fields.hand", title: "field hand", place: "fields", wage: 2, hours: [7, 14], slots: 2 },
     { id: "tavern.keep", title: "tavern keeper's help", place: "tavern", wage: 2, hours: [16, 23], slots: 1 },
   ],
-  float: { inn: 60, market: 20, bakery: 40, fishhouse: 40, smokehouse: 40, netloft: 30, fishmonger: 30, drygoods: 30, saltpan: 30, kelpshore: 30, tavern: 30, fields: 30, harbor: 40 },
+  float: { inn: 60, market: 20, bakery: 40, fishhouse: 40, smokehouse: 40, boatyard: 40, netloft: 30, fishmonger: 30, drygoods: 30, saltpan: 30, kelpshore: 30, tavern: 30, fields: 30, harbor: 40 },
   produce: [
     { place: "fishhouse", makes: "fish", qty: 14 },
     { place: "smokehouse", makes: "smoked fish", qty: 6, needs: { item: "fish", qty: 6 } },
@@ -72,6 +76,7 @@ export const KESTREL: WorldPack = {
     { place: "bakery", makes: "bread", qty: 12, needs: { item: "flour", qty: 1 } },
     { place: "inn", makes: "soup", qty: 8, needs: { item: "fish", qty: 2 } }, { place: "tavern", makes: "drink", qty: 4 },
     { place: "netloft", makes: "rope", qty: 1 }, { place: "netloft", makes: "lamp oil", qty: 1 },
+    { place: "boatyard", makes: "boat", qty: 1, needs: { item: "timber", qty: 4 } },
   ],
   feasts: [{ name: "the kestrel run", month: 5, day: 12, place: "harbor" }, { name: "the salt fair", month: 8, day: 30, place: "market" }, { name: "the light's night", month: 11, day: 2, place: "lighthouse" }],
   supply: [
@@ -84,6 +89,6 @@ export const KESTREL: WorldPack = {
   ],
   // Kestrel's income: the sea's harvest and salt. It has no timber and little grain — those come by boat from the island.
   exports: [
-    { item: "fish", price: 1, keep: 16 }, { item: "smoked fish", price: 2, keep: 8 }, { item: "kelp", price: 1, keep: 8 }, { item: "salt", price: 2, keep: 12 },
+    { item: "fish", price: 1, keep: 16 }, { item: "smoked fish", price: 2, keep: 8 }, { item: "kelp", price: 1, keep: 8 }, { item: "salt", price: 2, keep: 12 }, { item: "boat", price: 10, keep: 0 },
   ],
 };
