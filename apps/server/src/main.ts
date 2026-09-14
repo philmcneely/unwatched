@@ -38,7 +38,10 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const processStarted = new Date().toISOString();
 const PORT = Number(process.env.PORT ?? 4000);
-const SEED = Number(process.env.UW_SEED ?? 42);
+// Each island gets its OWN seed (from its id) unless UW_SEED is set — so no two islands share the same
+// citizens or the same random layout. (Without this, every island seeded from 42 and became a copy.)
+function seedFromId(s: string): number { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) % 2147483647 || 1; }
+const SEED = process.env.UW_SEED ? Number(process.env.UW_SEED) : seedFromId(process.env.UW_TOWN_ID ?? "island");
 const MS_PER_SIM_MINUTE = Number(process.env.UW_MS_PER_SIM_MINUTE ?? 1000); // 60000 is real time
 const BRAIN = process.env.UW_BRAIN ?? "mock";
 const CITIZENS_ENV = process.env.UW_CITIZENS ? Number(process.env.UW_CITIZENS) : null; // explicit override; otherwise scaled to island size below
@@ -180,6 +183,7 @@ if (saved && saved.agents.length > 0) {
   for (const a of town.agents.values()) billing.applyPlan(a);
   log(`restored the island from its record: ${town.clock()}, ${town.agents.size} citizens, ${saved.papers.length} editions`);
 } else {
+  town.varyLayout(); // flip the map per-island so harbours/towns sit on different shores — no two islands identical
   for (const p of seedPersonas(new Rng(SEED), CITIZENS)) town.addAgent({ persona: p, owner: null });
   town.settleInitialHousing(); // a mix of owners, landlords, renters and inn-lodgers — not everyone in the inn
   if (store) { await store.ensureTown("The island", SEED); await store.snapshot(town); }

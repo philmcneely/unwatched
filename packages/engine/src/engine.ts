@@ -1337,6 +1337,18 @@ export class Town {
   }
 
   /**
+   * No two islands laid out alike: a fresh island may be mirrored on either axis so its harbour, town and
+   * fields sit on different shores than its neighbours'. Coordinates only — exits and relationships are
+   * unchanged, so pathing and gameplay are identical; only the geography turns. Fresh islands only.
+   */
+  varyLayout(): void {
+    const W = this.pack.size.w, H = this.pack.size.h;
+    const flipX = this.rng.chance(0.5), flipY = this.rng.chance(0.5);
+    if (!flipX && !flipY) return;
+    for (const p of this.places.values()) { if (flipX) p.x = W - p.x; if (flipY) p.y = H - p.y; }
+  }
+
+  /**
    * A fresh island houses its people the way a real town does — a mix, not a dormitory: some own the roof
    * they sleep under, a few own more than one and let the spare rooms, many rent, and a handful are still at
    * the inn. Builds plain houses near the town as needed so there are enough beds. Call once, on a new island,
@@ -1349,17 +1361,22 @@ export class Town {
     for (const h of homes) h.freeBeds = h.beds!.capacity; // start every house empty
     const template = homes[0] ?? [...this.places.values()].find((p) => p.beds);
     if (!template) return;
-    const anchors = [...this.places.values()].filter((p) => p.kind === "home" || p.id === "market" || p.id === "inn");
-    const ax = anchors.reduce((s, p) => s + p.x, 0) / Math.max(1, anchors.length);
-    const ay = anchors.reduce((s, p) => s + p.y, 0) / Math.max(1, anchors.length);
-    const W = this.pack.size.w, H = this.pack.size.h, spread = Math.min(W, H) * 0.3;
+    const W = this.pack.size.w, H = this.pack.size.h;
+    const cx = W / 2, cy = H / 2, Rx = W / 2 - 140, Ry = H / 2 - 140;
+    // Houses cluster into a few NEIGHBOURHOODS — around the market, the harbour, and a couple of random
+    // inland spots — instead of one blob, so each island's town spreads differently.
+    const hoods: { x: number; y: number }[] = [];
+    for (const id of ["market", "harbor"]) { const p = this.places.get(id); if (p) hoods.push({ x: p.x, y: p.y }); }
+    for (let k = 0; k < 2; k++) hoods.push({ x: cx + (R.next() * 2 - 1) * Rx * 0.6, y: cy + (R.next() * 2 - 1) * Ry * 0.6 });
+    if (!hoods.length) hoods.push({ x: cx, y: cy });
     const capacity = () => homes.reduce((s, h) => s + (h.beds!.capacity), 0);
     const target = Math.ceil(citizens.length * 0.9); // house ~90% by beds, the rest keep to the inn
     const houseCount = Math.ceil(citizens.length * 0.65); // enough SEPARATE houses for owner-occupiers + spares for landlords
     for (let made = 1; (homes.length < houseCount || capacity() < target) && made <= 120; made++) {
-      const ang = R.next() * Math.PI * 2, rad = 90 + R.next() * spread;
-      const x = Math.max(120, Math.min(W - 120, ax + Math.cos(ang) * rad));
-      const y = Math.max(120, Math.min(H - 120, ay + Math.sin(ang) * rad));
+      const hood = hoods[Math.floor(R.next() * hoods.length)]!;
+      const ang = R.next() * Math.PI * 2, rad = 40 + R.next() * 240;
+      const x = Math.max(120, Math.min(W - 120, hood.x + Math.cos(ang) * rad));
+      const y = Math.max(120, Math.min(H - 120, hood.y + Math.sin(ang) * rad));
       const cap = 2 + Math.floor(R.next() * 3); // 2..4 beds
       const p = structuredClone(template) as Place;
       p.id = `house-${made}`; p.name = "a house"; p.kind = "home"; p.x = x; p.y = y; p.district = "homes";
