@@ -1004,6 +1004,7 @@ export class Town {
     }
     if (this.economyFrozen) return;
     if (h === 6) { this.cart(); this.prosper(); }
+    if (h === 7) this.merchants(); // the trade house works the gluts before the morning mainland boat
     if (h === 8) this.sellToMainland();
     const feast = this.feastToday();
     if (h === 9 && feast && this.places.has(feast.place) && !this.gatherings.some((g) => g.kind === "feast" && g.day === this.day)) this.gather("feast", feast.place, this.day, 13, [], feast.name);
@@ -1377,6 +1378,44 @@ export class Town {
       void cost;
     }
     // the boat: whatever is over what a place keeps back goes across the water. Other islands that want it are served first, at seven, by the server; what is left goes to the mainland at eight.
+  }
+
+  /** A place is a trade house if a merchant works it — a job whose id ends in ".merchant". The merchant reads the shelves and profits from the spread. */
+  private isTradeHouse(place: Place): boolean {
+    for (const j of this.jobs.values()) if (j.place === place.id && j.id.endsWith(".merchant")) return true;
+    return false;
+  }
+
+  /**
+   * The merchant's morning. A trade house buys glutted export goods cheap off the island's shelves — clearing the pile-ups the new supply-and-demand price marks as a bargain — and puts them on the mainland boat at the export price, keeping the spread. It only moves what turns a profit, only what a shelf has to spare above its target, and only what its purse can buy; and, like everyone else, it does no mainland trade in a storm, when the boat does not cross. The spread fills the trade house's purse (its owner's, or its own till), which then pays the merchant's wage the ordinary way.
+   */
+  private merchants(): void {
+    if (!this.boatRunning) return; // the mainland boat is not crossing; no export today
+    const harbor = this.places.get("harbor");
+    for (const house of this.places.values()) {
+      if (!this.isTradeHouse(house)) continue;
+      if (house.brokenUntil && house.brokenUntil > this.day) continue; // a burnt trade house does no business
+      const owner = house.owner ? this.agents.get(house.owner) : null;
+      const purse = () => (owner ? owner.coins : house.treasury);
+      for (const ex of this.pack.exports) {
+        for (const shelf of this.places.values()) {
+          if (shelf.id === house.id || !shelf.sells.some((s) => s.item === ex.item)) continue;
+          const target = this.shelfTarget(shelf, ex.item); const have = shelf.stock[ex.item] ?? 0;
+          if (have < target * 2) continue; // only a real glut is worth the merchant's while
+          const buy = this.buyPrice(shelf, ex.item); if (buy === null || buy >= ex.price) continue; // no spread, no trade
+          const units = Math.min(4, have - target, Math.floor(purse() / buy)); if (units <= 0) continue;
+          // buy the glut off the shelf, paying its owner or its till, easing it back toward its target
+          const cost = units * buy; shelf.stock[ex.item] = have - units;
+          if (owner) owner.coins -= cost; else house.treasury -= cost;
+          const sowner = shelf.owner ? this.agents.get(shelf.owner) : null; if (sowner) sowner.coins += cost; else shelf.treasury += cost;
+          // ship it to the mainland at the export price; the harbor takes its tenth, the mainland mints the coins
+          const gross = units * ex.price; const cut = Math.floor(gross / 10);
+          if (owner) owner.coins += gross - cut; else house.treasury += gross - cut;
+          if (harbor) harbor.treasury += cut; this.minted += gross;
+          this.emit("boat.depart", [], house.id, `${house.name} bought ${units} ${ex.item} cheap off a full shelf and shipped it to the mainland for ${gross} coins.`, 0.3, { to: "the mainland", item: ex.item, units, coins: gross, from: shelf.id });
+        }
+      }
+    }
   }
   /** What the island could put on the boat this morning: the surplus above what each place keeps back. */
   cargoOffers(): { item: string; qty: number; price: number; place: PlaceId }[] {
