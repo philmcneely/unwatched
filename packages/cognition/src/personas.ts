@@ -25,12 +25,34 @@ const SEED: Omit<Persona, "traits">[] = [
   { name: "Bruno Matić", age: 38, origin: "the mainland, last year", summary: "Clerk at the chandlery, counting coins that are not his.", want: "To open his own shop.", fear: "Vesna reading his notebook.", secret: "The notebook is a plan to buy the chandlery when Vesna dies.", strangers: "Helpful, forgets nothing.", advice: "Writes it down." },
 ];
 
+// Names drawn from many cultures, so an island is not a monoculture and no two islands share a cast.
+const FIRST_NAMES = [
+  "Amara", "Kenji", "Priya", "Mateo", "Fatima", "Sven", "Ling", "Omar", "Zola", "Diego",
+  "Aisha", "Yuki", "Kwame", "Sofia", "Ravi", "Nia", "Hassan", "Elena", "Tariq", "Mei",
+  "Kofi", "Ingrid", "Rahul", "Camila", "Jin", "Layla", "Bjorn", "Anaya", "Tomas", "Sana",
+  "Dmitri", "Chidi", "Marisol", "Haruki", "Zainab", "Lars", "Imani", "Pablo", "Noor", "Wei",
+  "Rosa", "Petar", "Ivana", "Luka", "Ana", "Nikola", "Dora", "Amina", "Sefu", "Yara",
+];
+const SURNAMES = [
+  "Okafor", "Tanaka", "Patel", "Rossi", "Haddad", "Larsson", "Chen", "Nwosu", "Kim", "Silva",
+  "Abadi", "Mwangi", "Novak", "Reyes", "Singh", "Osei", "Andersson", "Khan", "Duval", "Costa",
+  "Yamamoto", "Bello", "Park", "Moreno", "Volkov", "Adeyemi", "Fischer", "Nakamura", "Ali", "Ferrari",
+  "Vidal", "Ilić", "Horvat", "Babić", "Marić", "Kovač", "Petrić", "Diallo", "Haidari", "Tesfaye",
+];
+
 export function seedPersonas(rng: Rng, n: number): Persona[] {
+  const pick = <T,>(a: T[]) => a[Math.floor(rng.next() * a.length)]!;
+  // shuffle the archetypes so personalities appear in a different order on each island
+  const archetypes = SEED.map((s) => ({ s, k: rng.next() })).sort((a, b) => a.k - b.k).map((o) => o.s);
+  const usedNames = new Set<string>();
   const out: Persona[] = [];
   for (let i = 0; i < n; i++) {
-    const base = SEED[i % SEED.length]!;
-    const suffix = i >= SEED.length ? ` ${Math.floor(i / SEED.length) + 1}` : "";
-    out.push({ ...base, name: base.name + suffix, traits: { warmth: rng.next(), pride: rng.next(), caution: rng.next(), honesty: rng.next(), ambition: rng.next() } });
+    const base = archetypes[i % archetypes.length]!; // personality template (want/fear/secret/manner)
+    let name = `${pick(FIRST_NAMES)} ${pick(SURNAMES)}`;
+    for (let tries = 0; usedNames.has(name) && tries < 12; tries++) name = `${pick(FIRST_NAMES)} ${pick(SURNAMES)}`;
+    usedNames.add(name);
+    const { name: _drop, ...rest } = base;
+    out.push({ ...rest, name, traits: { warmth: rng.next(), pride: rng.next(), caution: rng.next(), honesty: rng.next(), ambition: rng.next() } });
   }
   return out;
 }
