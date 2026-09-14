@@ -351,6 +351,11 @@ app.post("/api/boat/arrive", async (c) => {
 app.get("/api/office", (c) => c.json({ signIn: sb && process.env.UW_DEV_OWNER !== "1" ? "supabase" : "dev" }));
 app.route("/api/construction", constructionRoutes(town, TOWN_NAME));
 app.get("/api/town", (c) => c.json({ ...clockOf(town), name: TOWN_NAME, id: TOWN_ID, size: town.pack.size, places: [...town.places.values()].map(placeView), laws: town.laws, children: town.children.map(childView) }));
+/**
+ * A compact self-descriptor for an optional coordinator hub (and for a spectator island-picker). The hub seam:
+ * an island advertises who it is and who it boats to; it never depends on a hub to run. See docs/hub-design.md.
+ */
+app.get("/api/island", (c) => c.json({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, day: town.day, weather: town.weather, population: town.agents.size, harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }));
 /** Children of the island who could be adopted: unowned, growing up or already grown. Adopting means writing to them; nothing more. */
 app.get("/api/children", (c) => c.json({
   growing: town.children.filter((ch) => !ch.adoptedBy).map(childView),
@@ -779,6 +784,20 @@ app.get("/api/me/agents", async (c) => {
 });
 app.get("/api/evolution", c => c.json({island:town.name,day:town.day,retention:{stories:64,momentsPerStory:40},stories:[...town.evolution].sort((a,b)=>b.updated-a.updated),institutions:[...town.places.values()].filter(p=>p.institution).map(p=>({place:p.id,...p.institution})),skills:[...town.agents.values()].flatMap(a=>(a.skills??[]).map(s=>({id:s.id,name:s.recipe.name,goal:s.recipe.goal,agent:a.id,agentName:a.persona.name,origin:s.origin,learnedFrom:s.learnedFrom??null,attempts:s.attempts,successes:s.successes,evidence:s.evidence}))) }));
 app.get("/api/health", (c) => c.json({ ok: true, version: process.env.RELEASE_VERSION ?? "dev", commit: process.env.COMMIT_SHA ?? "local", clock: clockOf(town), brain: brain.name }));
+
+// ---- Optional coordinator hub: self-registration + heartbeat ----
+// The island tells a hub it exists, if one is configured; it never depends on the answer. No UW_HUB_URL => no-op.
+// This is only the discovery seam; the hub itself (registry, diplomacy, map, mainland, military) is designed in docs/hub-design.md.
+const HUB_URL = (process.env.UW_HUB_URL ?? "").trim().replace(/\/$/, "");
+const HUB_SECRET = process.env.UW_HUB_SECRET ?? "";
+async function registerWithHub(): Promise<void> {
+  if (!HUB_URL) return;
+  try {
+    const res = await fetch(`${HUB_URL}/register`, { method: "POST", headers: { "Content-Type": "application/json", ...(HUB_SECRET ? { "X-Hub": HUB_SECRET } : {}) }, body: JSON.stringify({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, day: town.day, weather: town.weather, population: town.agents.size, harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }), signal: AbortSignal.timeout(5000) });
+    if (!res.ok) log(`hub register: ${res.status}`);
+  } catch (err) { log(`hub register: ${(err as Error).message}`); } // a hub that is down changes nothing about the island
+}
+if (HUB_URL) { log(`registering with hub at ${HUB_URL}`); void registerWithHub(); setInterval(() => void registerWithHub(), 120000); }
 
 // ---- WebSocket stream ----
 const server = serve({ fetch: app.fetch, port: PORT, createServer }, () => log(`listening on http://localhost:${PORT}`));
