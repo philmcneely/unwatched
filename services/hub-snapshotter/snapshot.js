@@ -8,7 +8,7 @@ const HUB = (process.env.HUB_URL || "http://uw2-hub:4600").replace(/\/$/, "");
 const OUT = process.env.SNAP_DIR || "/data/snaps";
 const CHROMIUM = process.env.CHROMIUM || "/usr/bin/chromium";
 const INTERVAL = Math.max(5, parseInt(process.env.INTERVAL_MIN || "45", 10)) * 60 * 1000;
-const SETTLE = Math.max(3000, parseInt(process.env.SETTLE_MS || "9000", 10)); // let the island paint before the shot
+const SETTLE = Math.max(3000, parseInt(process.env.SETTLE_MS || "22000", 10)); // the map camera eases to the whole-island zoom over ~20s; wait it out before the shot
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function pass(browser) {
