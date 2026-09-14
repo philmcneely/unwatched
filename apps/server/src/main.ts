@@ -72,6 +72,30 @@ const SITE_URL = (process.env.UW_PUBLIC_URL ?? "https://unwatched.world").replac
 /** Other islands a boat runs to: UW_HARBORS="north=https://north.example/engine,west=http://localhost:4011". Names are fetched from them. */
 const HARBORS: { id: string; url: string; name: string }[] = (process.env.UW_HARBORS ?? "").split(",").map((x) => x.trim()).filter(Boolean).map((x) => { const [id, url] = x.split("="); return { id: id!.trim(), url: (url ?? "").trim().replace(/\/$/, ""), name: id!.trim() }; }).filter((h) => h.url);
 const BOAT_SECRET = process.env.UW_BOAT_SECRET ?? "";
+
+// ---- Optional coordinator hub (docs/hub-design.md). All best-effort, all no-op without UW_HUB_URL. ----
+const HUB_URL = (process.env.UW_HUB_URL ?? "").trim().replace(/\/$/, ""); // the master switch
+const HUB_SECRET = process.env.UW_HUB_SECRET ?? "";
+const ISLAND_URL = (process.env.UW_ISLAND_URL ?? SITE_URL).replace(/\/$/, ""); // this island's public address, for the hub's directory
+const hubHeaders = { "Content-Type": "application/json", ...(HUB_SECRET ? { "X-Hub": HUB_SECRET } : {}) };
+type Policy = { stance: string; embargo: boolean; tariff: number; passengersBlocked: boolean };
+const OPEN: Policy = { stance: "neutral", embargo: false, tariff: 0, passengersBlocked: false };
+const relStats = new Map<string, { at: number; policy: Policy }>();
+/** This island's outbound stance toward a sibling, per the hub. Cached 60s; any hub blip falls back to open — a crossing is NEVER blocked by hub trouble, only by a real embargo. */
+async function hubRelation(to: string): Promise<Policy> {
+  if (!HUB_URL) return OPEN;
+  const hit = relStats.get(to); if (hit && Date.now() - hit.at < 60000) return hit.policy;
+  try {
+    const res = await fetch(`${HUB_URL}/relations/${encodeURIComponent(TOWN_ID)}/${encodeURIComponent(to)}`, { headers: hubHeaders, signal: AbortSignal.timeout(4000) });
+    if (res.ok) {
+      const d = (await res.json()) as { stance?: string; policy?: { embargo?: boolean; tariff?: number; passengersBlocked?: boolean } };
+      const p: Policy = { stance: d.stance ?? "neutral", embargo: !!d.policy?.embargo, tariff: Math.max(0, Math.min(1, Number(d.policy?.tariff) || 0)), passengersBlocked: !!d.policy?.passengersBlocked };
+      relStats.set(to, { at: Date.now(), policy: p }); return p;
+    }
+  } catch { /* fall through to open */ }
+  relStats.set(to, { at: Date.now(), policy: OPEN }); return OPEN;
+}
+
 const harborStats = new Map<string, { at: number; data: Record<string, unknown> | null }>();
 async function harborTown(h: { id: string; url: string }): Promise<Record<string, unknown> | null> {
   const hit = harborStats.get(h.id); if (hit && Date.now() - hit.at < 60000) return hit.data;
@@ -81,6 +105,8 @@ async function harborTown(h: { id: string; url: string }): Promise<Record<string
 /** Put a passenger on the boat to another island. True when the far harbor took them in. */
 async function boatTo(passenger: Passenger, to: string): Promise<boolean> {
   const h = HARBORS.find((x) => x.id === to); if (!h) return false;
+  const rel = await hubRelation(to);
+  if (rel.embargo || rel.passengersBlocked) { log(`boat to ${h.id}: refused (${rel.stance} stance)`); return false; } // reuses sail()'s tested "did not sail" path — fare refunded, citizen stays
   try {
     const res = await fetch(`${h.url}/api/boat/arrive`, { method: "POST", headers: { "Content-Type": "application/json", "X-Boat": BOAT_SECRET }, body: JSON.stringify(passenger), signal: AbortSignal.timeout(10000) });
     if (!res.ok) { log(`boat to ${h.id}: ${res.status} ${(await res.text()).slice(0, 120)}`); return false; }
@@ -328,6 +354,8 @@ async function sailCargo(): Promise<void> {
   if (!HARBORS.length || !BOAT_SECRET || !town.boatRunning) return;
   for (const h of HARBORS) {
     try {
+      const rel = await hubRelation(h.id);
+      if (rel.embargo) continue; // an embargo skips a rival's harbor entirely — no cargo crosses
       const offers = town.cargoOffers(); if (!offers.length) return;
       const res = await fetch(`${h.url}/api/boat/wants`, { headers: { "X-Boat": BOAT_SECRET }, signal: AbortSignal.timeout(8000) }); if (!res.ok) continue;
       const { wants } = (await res.json()) as { wants: { item: string; qty: number }[] };
@@ -335,7 +363,8 @@ async function sailCargo(): Promise<void> {
       const sent = await fetch(`${h.url}/api/boat/cargo`, { method: "POST", headers: { "Content-Type": "application/json", "X-Boat": BOAT_SECRET }, body: JSON.stringify({ from: TOWN_NAME, items: load.map(({ item, qty, price }) => ({ item, qty, price })) }), signal: AbortSignal.timeout(8000) });
       if (!sent.ok) continue;
       const { taken } = (await sent.json()) as { taken: { item: string; qty: number }[] };
-      town.ship(load.flatMap((o) => { const t = taken.find((x) => x.item === o.item); return t ? [{ ...o, qty: t.qty }] : []; }), h.name);
+      // a tariff toward `to` skims the crossing: the sender books the goods at a reduced price, so its harbor/owner nets less
+      town.ship(load.flatMap((o) => { const t = taken.find((x) => x.item === o.item); return t ? [{ ...o, qty: t.qty, price: rel.tariff > 0 ? Math.max(0, Math.round(o.price * (1 - rel.tariff))) : o.price }] : []; }), h.name);
     } catch (err) { log(`cargo to ${h.id}: ${(err as Error).message}`); }
   }
 }
@@ -343,6 +372,7 @@ app.post("/api/boat/arrive", async (c) => {
   if (!BOAT_SECRET || c.req.header("x-boat") !== BOAT_SECRET) return c.json({ error: "this harbor takes no boats from there" }, 403);
   if (!town.boatRunning) return c.json({ error: town.boatHeld ? "the boat is held" : "no crossing in this storm" }, 503);
   const body = Passenger.safeParse(await c.req.json().catch(() => null)); if (!body.success) return c.json({ error: body.error.issues[0]?.message ?? "bad manifest" }, 400);
+  const rel = await hubRelation(body.data.from.id); if (rel.embargo || rel.passengersBlocked) return c.json({ error: "this harbor is closed to that island" }, 403); // defense in depth: refuse a rival even if the sender ignored the embargo
   const a = town.arrive(body.data); billing.applyPlan(a); void deepen(a); // the depth comes in their first minutes, not before they board
   if (store) await store.snapshot(town);
   return c.json({ ok: true, id: a.id, island: TOWN_NAME });
@@ -787,11 +817,7 @@ app.get("/api/health", (c) => c.json({ ok: true, version: process.env.RELEASE_VE
 
 // ---- Optional coordinator hub: self-registration + heartbeat ----
 // The island tells a hub it exists, if one is configured; it never depends on the answer. No UW_HUB_URL => no-op.
-// This is only the discovery seam; the hub itself (registry, diplomacy, map, mainland, military) is designed in docs/hub-design.md.
-const HUB_URL = (process.env.UW_HUB_URL ?? "").trim().replace(/\/$/, "");
-const HUB_SECRET = process.env.UW_HUB_SECRET ?? "";
-const ISLAND_URL = (process.env.UW_ISLAND_URL ?? SITE_URL).replace(/\/$/, ""); // this island's own public address, for the hub's directory
-const hubHeaders = { "Content-Type": "application/json", ...(HUB_SECRET ? { "X-Hub": HUB_SECRET } : {}) };
+// (Hub config + the relation pull used by the crossings are defined up top, near BOAT_SECRET.)
 async function hubPost(path: string, body: unknown): Promise<void> {
   if (!HUB_URL) return;
   try {

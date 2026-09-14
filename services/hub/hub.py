@@ -20,8 +20,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("HUB_PORT", "4600"))
 SECRET = os.environ.get("HUB_SECRET", "")
+ADMIN_TOKEN = os.environ.get("HUB_ADMIN_TOKEN", "")  # separate, stronger cred for /admin/* (game actions)
 DB_PATH = os.environ.get("HUB_DB", "/data/hub.db")
 LIVE_SEC = int(os.environ.get("HUB_LIVE_SEC", "360"))
+STANCES = ("ally", "neutral", "rival", "enemy")
 
 _lock = threading.Lock()
 
@@ -40,6 +42,9 @@ def init_db():
             last_seen REAL, day INTEGER, weather TEXT, population INTEGER,
             minted INTEGER, burned INTEGER, flour_shortage INTEGER,
             mayor TEXT, boat TEXT, map_x REAL, map_y REAL, updated_at REAL )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS relations (
+            from_id TEXT, to_id TEXT, stance TEXT, embargo INTEGER, tariff REAL,
+            passengers_blocked INTEGER, updated_at REAL, PRIMARY KEY (from_id, to_id) )""")
 
 
 def now():
@@ -91,9 +96,41 @@ def update_state(island_id, b):
              now(), island_id))
 
 
+def get_relation(frm, to):
+    with db() as c:
+        r = c.execute("SELECT * FROM relations WHERE from_id=? AND to_id=?", (frm, to)).fetchone()
+    if not r:
+        return {"stance": "neutral", "policy": {"embargo": False, "tariff": 0.0, "passengersBlocked": False}}
+    return {"stance": r["stance"], "policy": {"embargo": bool(r["embargo"]),
+            "tariff": float(r["tariff"] or 0.0), "passengersBlocked": bool(r["passengers_blocked"])}}
+
+
+def set_relation(frm, to, stance=None, embargo=None, tariff=None, passengers_blocked=None):
+    cur = get_relation(frm, to)  # start from whatever's there (or the neutral default) and layer changes
+    st = stance if stance in STANCES else cur["stance"]
+    emb = cur["policy"]["embargo"] if embargo is None else bool(embargo)
+    tar = cur["policy"]["tariff"] if tariff is None else max(0.0, min(1.0, float(tariff)))
+    pb = cur["policy"]["passengersBlocked"] if passengers_blocked is None else bool(passengers_blocked)
+    with _lock, db() as c:
+        c.execute("""INSERT INTO relations (from_id,to_id,stance,embargo,tariff,passengers_blocked,updated_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(from_id,to_id) DO UPDATE SET stance=excluded.stance, embargo=excluded.embargo,
+              tariff=excluded.tariff, passengers_blocked=excluded.passengers_blocked, updated_at=excluded.updated_at""",
+            (frm, to, st, 1 if emb else 0, tar, 1 if pb else 0, now()))
+    return get_relation(frm, to)
+
+
+def all_relations():
+    with db() as c:
+        rows = c.execute("SELECT * FROM relations ORDER BY from_id, to_id")
+        return [{"from": r["from_id"], "to": r["to_id"], "stance": r["stance"],
+                 "embargo": bool(r["embargo"]), "tariff": float(r["tariff"] or 0.0),
+                 "passengersBlocked": bool(r["passengers_blocked"])} for r in rows]
+
+
 def world_map():
-    # v1: islands are real; the rest are stable-but-empty until later phases fill them in.
-    return {"islands": all_islands(), "relations": [], "conflicts": [],
+    # v1: islands + relations are real; conflicts/mainland/events stay stable-but-empty until later phases.
+    return {"islands": all_islands(), "relations": all_relations(), "conflicts": [],
             "mainland": {"mood": "neutral", "edicts": []}, "events": []}
 
 
@@ -193,19 +230,44 @@ class H(BaseHTTPRequestHandler):
             iid = m.group(1)
             row = next((i for i in all_islands() if i["id"] == iid), None)
             return self._send(200, row) if row else self._send(404, {"error": "no such island"})
+        m = re.match(r"^/relations/([^/]+)/([^/]+)$", p)
+        if m:
+            rel = get_relation(m.group(1), m.group(2))
+            rel["asOf"] = int(now()); rel["ttl"] = 60
+            return self._send(200, rel)
         return self._send(404, {"error": "not found"})
 
     def do_HEAD(self):
         self.do_GET()
 
+    def _admin_ok(self):
+        return bool(ADMIN_TOKEN) and self.headers.get("X-Hub-Admin") == ADMIN_TOKEN
+
     def do_POST(self):
         p = self.path.split("?", 1)[0].rstrip("/")
-        if not self._authed():
-            return self._send(403, {"error": "bad or missing X-Hub secret"})
         try:
             b = self._body()
         except Exception:
             return self._send(400, {"error": "bad json"})
+
+        # ---- admin / game actions (§16): a separate, stronger credential, never an island's secret ----
+        if p.startswith("/admin/"):
+            if not self._admin_ok():
+                return self._send(403, {"error": "admin disabled or bad X-Hub-Admin token"})
+            if p == "/admin/embargo":  # {from,to,on}
+                if not b.get("from") or not b.get("to"):
+                    return self._send(400, {"error": "from and to required"})
+                st = "enemy" if b.get("on", True) else "neutral"
+                return self._send(200, {"ok": True, "relation": set_relation(b["from"], b["to"], stance=st, embargo=bool(b.get("on", True)))})
+            if p == "/admin/tariff":  # {from,to,rate}
+                if not b.get("from") or not b.get("to"):
+                    return self._send(400, {"error": "from and to required"})
+                return self._send(200, {"ok": True, "relation": set_relation(b["from"], b["to"], tariff=b.get("rate", 0))})
+            return self._send(404, {"error": "not found"})
+
+        # ---- island-authenticated writes ----
+        if not self._authed():
+            return self._send(403, {"error": "bad or missing X-Hub secret"})
         if p == "/islands":
             if not b.get("id"):
                 return self._send(400, {"error": "id required"})
@@ -215,6 +277,23 @@ class H(BaseHTTPRequestHandler):
         if m:
             update_state(m.group(1), b)
             return self._send(200, {"ok": True})
+        return self._send(404, {"error": "not found"})
+
+    def do_PUT(self):
+        p = self.path.split("?", 1)[0].rstrip("/")
+        if not self._admin_ok():
+            return self._send(403, {"error": "admin disabled or bad X-Hub-Admin token"})
+        try:
+            b = self._body()
+        except Exception:
+            return self._send(400, {"error": "bad json"})
+        m = re.match(r"^/admin/relations/([^/]+)/([^/]+)$", p)  # {stance, policy:{embargo,tariff,passengersBlocked}}
+        if m:
+            pol = b.get("policy", {})
+            rel = set_relation(m.group(1), m.group(2), stance=b.get("stance"),
+                               embargo=pol.get("embargo"), tariff=pol.get("tariff"),
+                               passengers_blocked=pol.get("passengersBlocked"))
+            return self._send(200, {"ok": True, "relation": rel})
         return self._send(404, {"error": "not found"})
 
 
