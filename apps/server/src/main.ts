@@ -41,7 +41,7 @@ const PORT = Number(process.env.PORT ?? 4000);
 const SEED = Number(process.env.UW_SEED ?? 42);
 const MS_PER_SIM_MINUTE = Number(process.env.UW_MS_PER_SIM_MINUTE ?? 1000); // 60000 is real time
 const BRAIN = process.env.UW_BRAIN ?? "mock";
-const CITIZENS = Number(process.env.UW_CITIZENS ?? 20);
+const CITIZENS_ENV = process.env.UW_CITIZENS ? Number(process.env.UW_CITIZENS) : null; // explicit override; otherwise scaled to island size below
 const log = (l: string) => console.log(`[town] ${l}`);
 
 const townBrain: Brain = BRAIN === "openrouter" ? new OpenRouterBrain({ log, allowFallback: false }) : BRAIN === "anthropic" ? new AnthropicBrain({ log }) : new MockBrain(SEED);
@@ -67,6 +67,9 @@ const TOWN_ID = process.env.UW_TOWN_ID ?? "island";
 const TOWN_NAME = process.env.UW_TOWN_NAME ?? "The island";
 // Which world this instance runs. UW_PACK selects a pack (island | kestrel | …); default the island.
 const PACK = WORLD_PACKS[process.env.UW_PACK ?? "island"] ?? ISLAND;
+// Bigger islands hold more people (and, via settleInitialHousing, more houses). Scaled from the island's area
+// unless UW_CITIZENS is set explicitly. ~14 on the smallest isle up to ~40 on the capital.
+const CITIZENS = CITIZENS_ENV ?? Math.max(14, Math.min(40, Math.round((PACK.size.w * PACK.size.h) / 180000)));
 /** Where the pages live, for the buttons in the mail: the island's address without the engine's own path. */
 const SITE_URL = (process.env.UW_PUBLIC_URL ?? "https://unwatched.world").replace(/\/engine\/?$/, "").replace(/\/$/, "");
 /** Other islands a boat runs to: UW_HARBORS="north=https://north.example/engine,west=http://localhost:4011". Names are fetched from them. */
