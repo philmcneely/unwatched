@@ -1669,8 +1669,16 @@ export class Town {
     if (item === "bread" && this.flourShortage) p *= 2;
     if (place.kind === "market" && this.weekday === 6) p = Math.max(1, p - 1);
     if (this.flush(place)) p = Math.max(1, p - 1); // a till that is full lets prices fall
+    // supply & demand: a nearly-bare shelf asks a coin more, one piled past double what it holds asks a coin less — bounded, so prices stay legible
+    const want = this.shelfTarget(place, item);
+    if (want > 0) { const have = place.stock[item] ?? 0; if (have > 0 && have <= Math.ceil(want * 0.2)) p += 1; else if (have >= want * 2) p = Math.max(1, p - 1); }
     const cap = this.rules.find((r): r is Extract<Rule, { kind: "cap" }> => r.kind === "cap" && r.item === item); if (cap) p = Math.min(p, cap.price);
-    return p;
+    return Math.max(1, p);
+  }
+  /** The stocked-shelf reference for an item: what the cart tops it up to, if a supply line feeds it, else a plain shelf's worth. Used to read scarcity and glut off the stock. */
+  private shelfTarget(place: Place, item: string): number {
+    const line = this.pack.supply.find((l) => l.to === place.id && l.item === item && l.upTo !== undefined);
+    return line?.upTo ?? 8;
   }
   /** An unowned business with far more in the till than it needs: it pays more, hires more, and charges less, until it does not. */
   flush(place: Place): boolean { return !place.owner && place.treasury > 3 * (this.pack.float[place.id] ?? 0) + 60; }
