@@ -16,7 +16,8 @@ async function pass(browser) {
   try {
     const r = await fetch(`${HUB}/world/islands`, { signal: AbortSignal.timeout(8000) });
     islands = (await r.json()).islands || [];
-  } catch (e) { console.log("[snap] hub fetch failed:", e.message); return; }
+  } catch (e) { console.log("[snap] hub fetch failed:", e.message); return false; }
+  if (!islands.length) return false;
   fs.mkdirSync(OUT, { recursive: true });
   for (const i of islands) {
     if (!i.url) continue;
@@ -27,7 +28,8 @@ async function pass(browser) {
       const sw = (i.size && i.size.w) || 3000, sh = (i.size && i.size.h) || 1800;
       const W = 1280, H = Math.round(W * sh / sw);
       await page.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
-      await page.goto(`${i.url}/film?view=map&clean=1&fx=0`, { waitUntil: "networkidle2", timeout: 45000 });
+      // NOT networkidle: the island holds a WebSocket open, so the network never goes idle. DOM + a fixed settle.
+      await page.goto(`${i.url}/film?view=map&clean=1&fx=0`, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.addStyleTag({ content: "body>*:not(main){display:none!important}" }); // drop analytics/feedback chrome
       await sleep(SETTLE);
       const tmp = path.join(OUT, `.${i.id}.tmp.png`), fin = path.join(OUT, `${i.id}.png`);
@@ -37,6 +39,7 @@ async function pass(browser) {
     } catch (e) { console.log(`[snap] ${i.id} failed:`, e.message); }
     finally { await page.close().catch(() => {}); }
   }
+  return true;
 }
 
 (async () => {
@@ -46,7 +49,7 @@ async function pass(browser) {
   });
   for (;;) {
     console.log("[snap] pass", new Date().toISOString());
-    await pass(browser);
-    await sleep(INTERVAL);
+    const ok = await pass(browser);
+    await sleep(ok ? INTERVAL : 15000); // if the hub wasn't ready, retry soon instead of waiting a full interval
   }
 })().catch((e) => { console.error("[snap] fatal:", e); process.exit(1); });
