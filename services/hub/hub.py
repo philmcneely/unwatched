@@ -152,54 +152,115 @@ def world_map():
 PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>The Archipelago</title>
 <style>
-:root{--ground:#14161a;--panel:#1b1f27;--edge:#2a3038;--ink:#f2efe6;--mist:#9aa3af;--kelp:#f2c14e;--ember:#E4572E;--live:#3fb984}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(120% 90% at 50% -10%,#1d2530 0%,var(--ground) 60%);color:var(--ink);font:16px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
-.wrap{max-width:1000px;margin:0 auto;padding:56px 20px 72px}
-.eyebrow{letter-spacing:.18em;text-transform:uppercase;font-size:12px;font-weight:700;color:var(--kelp)}
-h1{font-size:clamp(34px,6vw,56px);margin:.15em 0 .1em;font-weight:800;letter-spacing:-.01em}
-.lede{color:var(--mist);max-width:60ch;margin:0 0 32px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
-a.card{display:block;text-decoration:none;color:inherit;background:linear-gradient(180deg,var(--panel),#171b22);border:1px solid var(--edge);border-radius:16px;padding:18px 20px;transition:border-color .15s,transform .15s}
-a.card:hover{border-color:var(--kelp);transform:translateY(-2px)}
-.top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
-h2{font-size:22px;margin:0}
-.badge{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:3px 9px;background:#2a3038;color:var(--mist)}
-.badge.live{background:rgba(63,185,132,.16);color:var(--live)}
-.stats{display:flex;gap:16px;color:var(--mist);font-size:13px;margin-top:10px;flex-wrap:wrap}
-.stats b{color:var(--ink);font-weight:700}
-.kind{color:var(--mist);font-size:13px;margin:6px 0 0}
-.go{color:var(--kelp);font-weight:700;font-size:14px;margin-top:12px;display:inline-block}
-footer{margin-top:40px;color:var(--mist);font-size:13px;border-top:1px solid var(--edge);padding-top:18px}
-.err{color:var(--ember)}
-</style></head><body><div class=wrap>
-<div class=eyebrow>Unwatched · the archipelago</div>
-<h1>The Archipelago</h1>
-<p class=lede>Islands, each its own living town, cross-wired by boats. Pick one to watch — this list is live from the hub, so new islands appear the moment they come up.</p>
-<div class=grid id=grid><p class=mist>Loading the archipelago…</p></div>
-<footer id=foot></footer>
-</div><script>
+:root{--ground:#0e1620;--sea:#12354a;--sea2:#0c2436;--land:#2e3a2a;--land2:#3a4a32;--ink:#eaf1f2;--mist:#93a7b0;--kelp:#f2c14e;--ember:#E4572E;--live:#3fb984;--edge:#22303a}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{background:var(--ground);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+header{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;align-items:baseline;gap:14px;padding:14px 20px;background:linear-gradient(180deg,rgba(14,22,32,.92),rgba(14,22,32,0));pointer-events:none}
+header .eyebrow{letter-spacing:.18em;text-transform:uppercase;font-size:11px;font-weight:700;color:var(--kelp)}
+header h1{font-size:20px;margin:0;font-weight:800}
+header .count{color:var(--mist);font-size:13px;margin-left:auto;pointer-events:auto}
+#wrap{position:fixed;inset:0}
+svg{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+svg.drag{cursor:grabbing}
+#stage{transition:transform .55s cubic-bezier(.6,.02,.2,1)}
+.lane{stroke:#2b4d63;stroke-width:2;stroke-dasharray:6 8;fill:none;opacity:.55}
+.mainlane{stroke:#5a6b4a;stroke-width:2;stroke-dasharray:2 9;fill:none;opacity:.5}
+.rel{fill:none;stroke-width:4}
+.isle{cursor:pointer}
+.isle:hover .disc{stroke:var(--kelp);stroke-width:4}
+.disc{fill:#193a2e;stroke:#2b5a47;stroke-width:2;transition:stroke .15s,stroke-width .15s}
+.nm{font-weight:800;fill:var(--ink);text-anchor:middle}
+.meta{fill:var(--mist);text-anchor:middle;font-size:19px}
+.livedot{fill:var(--live)}.quietdot{fill:#5b6b73}
+.mainland-lbl{fill:#9fb08a;text-anchor:middle;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+.legend{position:fixed;left:16px;bottom:14px;z-index:5;background:rgba(14,22,32,.82);border:1px solid var(--edge);border-radius:12px;padding:10px 12px;font-size:12px;color:var(--mist);max-width:min(92vw,420px)}
+.legend b{color:var(--ink)}
+.legend .row{display:flex;align-items:center;gap:8px;margin:3px 0;flex-wrap:wrap}
+.sw{width:22px;height:0;border-top:4px solid}
+.hint{position:fixed;right:16px;bottom:14px;z-index:5;color:var(--mist);font-size:12px;background:rgba(14,22,32,.7);padding:6px 10px;border-radius:10px}
+.err{position:fixed;inset:0;display:grid;place-items:center;color:var(--ember)}
+</style></head><body>
+<header><span class=eyebrow>Unwatched</span><h1>The Archipelago</h1><span class=count id=count></span></header>
+<div id=wrap><svg id=svg viewBox="0 0 1000 720" preserveAspectRatio="xMidYMid meet"><g id=stage></g></svg></div>
+<div class=legend id=legend></div>
+<div class=hint>scroll / pinch to zoom · drag to pan · click an island to enter</div>
+<script>
+const NS="http://www.w3.org/2000/svg";
+const POS={capital:[500,300],island:[250,205],kestrel:[745,195],cairnhold:[780,430],vinehaven:[280,470]};
 const KIND={island:"the founding town",kestrel:"a fishing isle",cairnhold:"a mining hold",vinehaven:"a vineyard",capital:"the capital"};
-async function load(){
-  try{
-    const r=await fetch('/world/islands',{cache:'no-store'}); const d=await r.json();
-    const xs=(d.islands||[]).slice().sort((a,b)=>(b.pack==='capital')-(a.pack==='capital')||a.id.localeCompare(b.id));
-    const g=document.getElementById('grid');
-    if(!xs.length){g.innerHTML='<p class=err>No islands have registered yet.</p>';return;}
-    g.innerHTML=xs.map(function(i){
-      const live=i.live?'<span class="badge live">live</span>':'<span class=badge>quiet</span>';
-      const cap=i.pack==='capital';
-      return '<a class=card href="'+(i.url||'#')+'">'
-        +'<div class=top><h2>'+esc(i.name)+'</h2>'+live+'</div>'
-        +'<p class=kind>'+(cap?'★ ':'')+(KIND[i.pack]||i.pack)+'</p>'
-        +'<div class=stats><span><b>'+i.population+'</b> souls</span><span>day <b>'+i.day+'</b></span><span>'+esc(i.weather)+'</span></div>'
-        +'<span class=go>Watch '+esc(i.name)+' →</span></a>';
-    }).join('');
-    const liveN=xs.filter(function(i){return i.live}).length;
-    document.getElementById('foot').textContent=xs.length+' islands registered · '+liveN+' live. Separate from the original unwatched.draconis.io.';
-  }catch(e){document.getElementById('grid').innerHTML='<p class=err>Could not reach the hub.</p>';}
+const WGLYPH={clear:"☀️",rain:"🌧️",storm:"⛈️",wind:"🌬️",fog:"🌫️",snow:"❄️"};
+const REL={ally:"#3fb984",rival:"#f2c14e",enemy:"#E4572E"};
+const stage=document.getElementById("svg").querySelector("#stage");
+function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function pos(i,idx,n){if(POS[i.id])return POS[i.id];const a=-Math.PI/2+idx*2*Math.PI/Math.max(1,n);return [500+300*Math.cos(a),330+210*Math.sin(a)];}
+function esc(s){return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+
+async function draw(){
+  let d; try{ d=await (await fetch("/world/map",{cache:"no-store"})).json(); }
+  catch(e){ document.body.insertAdjacentHTML("beforeend","<div class=err>Could not reach the hub.</div>"); return; }
+  const isles=(d.islands||[]); const rels=(d.relations||[]);
+  const n=isles.length; const P={}; isles.forEach((i,ix)=>P[i.id]=pos(i,ix,n));
+  stage.textContent="";
+  // --- the mainland: the trade horizon along the foot of the sea (one now; blocs/allegiance come with v3) ---
+  const land=el("path",{d:"M -40 720 L -40 640 Q 250 600 500 632 Q 780 662 1040 618 L 1040 720 Z",fill:"var(--land)",stroke:"var(--land2)","stroke-width":2});
+  stage.appendChild(land);
+  stage.appendChild(Object.assign(el("text",{x:500,y:690,class:"mainland-lbl","font-size":22}),{textContent:"The mainland"}));
+  // export lanes: every island trades down to the mainland
+  isles.forEach(i=>{const [x,y]=P[i.id]; stage.appendChild(el("line",{x1:x,y1:y,x2:x,y2:632,class:"mainlane"}));});
+  // --- sea lanes between islands (from the harbors topology), de-duped ---
+  const seen=new Set();
+  isles.forEach(i=>(i.harbors||[]).forEach(h=>{const key=[i.id,h.id].sort().join("~"); if(seen.has(key)||!P[h.id])return; seen.add(key); const [x1,y1]=P[i.id],[x2,y2]=P[h.id]; stage.appendChild(el("line",{x1,y1,x2,y2,class:"lane"}));}));
+  // --- relation edges (diplomacy), directed, colored by stance ---
+  rels.forEach(r=>{ if(!P[r.from]||!P[r.to])return; const st=r.blockade?"enemy":r.stance; const col=REL[st]; if(!col&&!r.blockade&&!(r.friction>0))return;
+    const [x1,y1]=P[r.from],[x2,y2]=P[r.to]; const mx=(x1+x2)/2,my=(y1+y2)/2-24;
+    const path=el("path",{d:`M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`,class:"rel",stroke:col||"#E4572E",opacity:.85});
+    if(r.friction>0&&!r.blockade)path.setAttribute("stroke-dasharray","3 7");
+    if(r.blockade){path.setAttribute("stroke-width","6");}
+    stage.appendChild(path);
+  });
+  // --- islands ---
+  isles.forEach(i=>{const [x,y]=P[i.id]; const R=30+Math.min(26,(i.population||0)*0.9);
+    const g=el("g",{class:"isle"}); g.dataset.url=i.url||""; g.dataset.id=i.id;
+    g.appendChild(el("circle",{cx:x,cy:y,r:R+8,fill:"#0c2b22",opacity:.6}));
+    g.appendChild(el("circle",{cx:x,cy:y,r:R,class:"disc"}));
+    g.appendChild(Object.assign(el("text",{x:x,y:y+3,"text-anchor":"middle","font-size":26}),{textContent:WGLYPH[i.weather]||"⚓"}));
+    g.appendChild(el("circle",{cx:x+R-6,cy:y-R+6,r:6,class:i.live?"livedot":"quietdot"}));
+    g.appendChild(Object.assign(el("text",{x:x,y:y+R+26,class:"nm","font-size":22}),{textContent:(i.pack==="capital"?"★ ":"")+esc(i.name)}));
+    g.appendChild(Object.assign(el("text",{x:x,y:y+R+48,class:"meta"}),{textContent:(i.population||0)+" souls · day "+(i.day||0)+" · "+esc(i.weather||"?")}));
+    g.appendChild(Object.assign(el("text",{x:x,y:y+R+68,class:"meta","font-size":16,"fill":"#6f8390"}),{textContent:KIND[i.pack]||i.pack}));
+    g.addEventListener("click",()=>enter(i,x,y));
+    stage.appendChild(g);
+  });
+  document.getElementById("count").textContent=n+" islands · "+isles.filter(i=>i.live).length+" live";
+  renderLegend(rels);
 }
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]});}
-load(); setInterval(load,15000);
+function renderLegend(rels){
+  const active=rels.some(r=>r.stance&&r.stance!=="neutral"||r.blockade||r.friction>0);
+  document.getElementById("legend").innerHTML=
+    '<div class=row><b>The region.</b>&nbsp;Islands, the sea-lanes their boats run, and the mainland they trade with.</div>'+
+    '<div class=row><span class=sw style="border-color:#2b4d63;border-top-style:dashed"></span>boat route between islands</div>'+
+    '<div class=row><span class=sw style="border-color:#5a6b4a;border-top-style:dashed"></span>trade to the mainland</div>'+
+    (active?('<div class=row><span class=sw style="border-color:#E4572E"></span>enemy / blockade &nbsp; <span class=sw style="border-color:#f2c14e"></span>rival &nbsp; <span class=sw style="border-color:#3fb984"></span>ally &nbsp;<span style="color:#93a7b0">(dashed = leaky friction)</span></div>')
+            :'<div class=row style="color:#6f8390">All islands at peace — no rivalries declared yet.</div>');
+}
+// zoom into an island, then enter its live world
+function enter(i,x,y){
+  const url=i.url; if(!url)return;
+  if(matchMedia("(prefers-reduced-motion: reduce)").matches){location.href=url;return;}
+  const s=3.2; stage.style.transformOrigin=(x/1000*100)+"% "+(y/720*100)+"%";
+  document.getElementById("svg").style.transition="opacity .5s"; stage.style.transform="scale("+s+")";
+  document.getElementById("svg").style.opacity="0";
+  setTimeout(()=>location.href=url,520);
+}
+// pan + zoom (wheel/pinch/drag) on the viewBox
+const svg=document.getElementById("svg"); let vb={x:0,y:0,w:1000,h:720};
+function apply(){svg.setAttribute("viewBox",`${vb.x} ${vb.y} ${vb.w} ${vb.h}`);}
+svg.addEventListener("wheel",e=>{e.preventDefault();const r=svg.getBoundingClientRect();const mx=vb.x+(e.clientX-r.left)/r.width*vb.w;const my=vb.y+(e.clientY-r.top)/r.height*vb.h;const f=e.deltaY<0?0.88:1.14;const nw=Math.max(220,Math.min(2200,vb.w*f));const nh=nw*720/1000;vb.x=mx-(mx-vb.x)*(nw/vb.w);vb.y=my-(my-vb.y)*(nh/vb.h);vb.w=nw;vb.h=nh;apply();},{passive:false});
+let drag=null;
+svg.addEventListener("pointerdown",e=>{drag={x:e.clientX,y:e.clientY,vx:vb.x,vy:vb.y};svg.classList.add("drag");svg.setPointerCapture(e.pointerId);});
+svg.addEventListener("pointermove",e=>{if(!drag)return;const r=svg.getBoundingClientRect();vb.x=drag.vx-(e.clientX-drag.x)/r.width*vb.w;vb.y=drag.vy-(e.clientY-drag.y)/r.height*vb.h;apply();});
+svg.addEventListener("pointerup",e=>{drag=null;svg.classList.remove("drag");});
+draw(); setInterval(draw,15000);
 </script></body></html>"""
 
 
