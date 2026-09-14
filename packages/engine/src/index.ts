@@ -7,7 +7,7 @@ export { habit } from "./habit.ts";
 export { retrieve, compress, age, drift } from "./memory.ts";
 export { MINUTES_PER_DAY } from "./world.ts";
 export { embed, cosine } from "./embed.ts";
-export { ISLAND, KESTREL, CAIRNHOLD, VINEHAVEN, PACKS, BUILDS, WORKS, lookHash, buildKind } from "./world.ts";
+export { ISLAND, KESTREL, CAIRNHOLD, VINEHAVEN, CAPITAL, PACKS, BUILDS, WORKS, lookHash, buildKind } from "./world.ts";
 export type { WorldPack, PlaceSpec, JobSpec, ProduceSpec, SupplySpec, ExportSpec, FeastSpec } from "./world.ts";
 export { sha256, canonicalEvent } from "./hash.ts";
 
