@@ -1336,6 +1336,52 @@ export class Town {
     return a;
   }
 
+  /**
+   * A fresh island houses its people the way a real town does — a mix, not a dormitory: some own the roof
+   * they sleep under, a few own more than one and let the spare rooms, many rent, and a handful are still at
+   * the inn. Builds plain houses near the town as needed so there are enough beds. Call once, on a new island,
+   * right after the first citizens are seeded (never on a restored island — its housing is in the record).
+   */
+  settleInitialHousing(): void {
+    const citizens = [...this.agents.values()]; if (!citizens.length) return;
+    const R = this.rng;
+    const homes: Place[] = [...this.places.values()].filter((p) => p.kind === "home" && p.beds);
+    for (const h of homes) h.freeBeds = h.beds!.capacity; // start every house empty
+    const template = homes[0] ?? [...this.places.values()].find((p) => p.beds);
+    if (!template) return;
+    const anchors = [...this.places.values()].filter((p) => p.kind === "home" || p.id === "market" || p.id === "inn");
+    const ax = anchors.reduce((s, p) => s + p.x, 0) / Math.max(1, anchors.length);
+    const ay = anchors.reduce((s, p) => s + p.y, 0) / Math.max(1, anchors.length);
+    const W = this.pack.size.w, H = this.pack.size.h, spread = Math.min(W, H) * 0.3;
+    const capacity = () => homes.reduce((s, h) => s + (h.beds!.capacity), 0);
+    const target = Math.ceil(citizens.length * 0.9); // house ~90% by beds, the rest keep to the inn
+    const houseCount = Math.ceil(citizens.length * 0.65); // enough SEPARATE houses for owner-occupiers + spares for landlords
+    for (let made = 1; (homes.length < houseCount || capacity() < target) && made <= 120; made++) {
+      const ang = R.next() * Math.PI * 2, rad = 90 + R.next() * spread;
+      const x = Math.max(120, Math.min(W - 120, ax + Math.cos(ang) * rad));
+      const y = Math.max(120, Math.min(H - 120, ay + Math.sin(ang) * rad));
+      const cap = 2 + Math.floor(R.next() * 3); // 2..4 beds
+      const p = structuredClone(template) as Place;
+      p.id = `house-${made}`; p.name = "a house"; p.kind = "home"; p.x = x; p.y = y; p.district = "homes";
+      p.owner = null; p.treasury = 0; p.stock = {}; p.site = null; p.exits = []; p.sells = [];
+      p.beds = { price: 3 + Math.floor(R.next() * 2), capacity: cap }; p.freeBeds = cap;
+      delete p.decorations; delete p.institution; delete p.history; delete p.community; delete p.nickname; delete p.look; delete p.brokenUntil; delete p.recipes; delete p.aliases;
+      this.places.set(p.id, p); homes.push(p);
+    }
+    const order = citizens.map((a) => ({ a, k: R.next() })).sort((x, y) => x.k - y.k).map((o) => o.a);
+    const inn = this.places.get("inn"); const freeInn = () => { if (inn) inn.freeBeds = Math.min(inn.beds?.capacity ?? 6, (inn.freeBeds ?? 0) + 1); }; // give back the bed addAgent took at the inn
+    const openHome = (notOwnedBy?: string) => homes.find((h) => (h.freeBeds ?? 0) > 0 && h.owner !== notOwnedBy);
+    const n = order.length, nOwners = Math.round(n * 0.5), nTenants = Math.round(n * 0.35);
+    const owners: AgentState[] = [];
+    let i = 0;
+    for (; i < nOwners; i++) { const a = order[i]!; const h = homes.find((x) => !x.owner && (x.freeBeds ?? 0) > 0); if (!h) break; h.owner = a.id; h.freeBeds = (h.freeBeds ?? h.beds!.capacity) - 1; a.home = { place: h.id, nightsPaid: 30 }; owners.push(a); freeInn(); }
+    for (const a of owners) if (R.next() < 0.25) { const h = homes.find((x) => !x.owner); if (h) h.owner = a.id; } // ~1 in 4 owners is a landlord with a second house to let
+    let t = 0;
+    for (; i < n && t < nTenants; i++) { const a = order[i]!; const h = openHome(a.id); if (!h) break; h.freeBeds = (h.freeBeds ?? h.beds!.capacity) - 1; a.home = { place: h.id, nightsPaid: 5 }; freeInn(); t++; } // renters pay the owner (or the town, if the house is unowned)
+    // whoever is left keeps the inn (newcomers, the transient) — addAgent already homed them there
+    this.emit("town.notice", [], "market", `The island settled in: ${owners.length} own their homes, ${t} rent, the rest lodge at the inn.`, 0.2, { owners: owners.length, tenants: t });
+  }
+
   /** A business that is doing well pays better and takes on more help; one that is not goes back to its posted terms. Unowned places only; an owner sets their own. */
   private prosper(): void {
     for (const job of this.jobs.values()) {

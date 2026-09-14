@@ -178,6 +178,7 @@ if (saved && saved.agents.length > 0) {
   log(`restored the island from its record: ${town.clock()}, ${town.agents.size} citizens, ${saved.papers.length} editions`);
 } else {
   for (const p of seedPersonas(new Rng(SEED), CITIZENS)) town.addAgent({ persona: p, owner: null });
+  town.settleInitialHousing(); // a mix of owners, landlords, renters and inn-lodgers — not everyone in the inn
   if (store) { await store.ensureTown("The island", SEED); await store.snapshot(town); }
   log("a new island: seeded the first citizens");
 }
