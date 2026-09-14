@@ -272,6 +272,26 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       };
       for (const p of places.values()) drawPlace(p);
       const decor = keepOffRoads(decorFor([...places.values()]), segs);
+      // Nature: scatter across each island's interior so it reads as a living place, not a bare lot.
+      // Themed by what the island does (forest for lumber, rock for mining, olive/cypress for the vineyard),
+      // density scaled by area (bigger islands are lusher), kept inland and clear of the buildings.
+      {
+        const placeArr = [...places.values()];
+        const has = (...ids: string[]) => ids.some((id) => placeArr.some((p) => p.id === id));
+        const woody = has("pinewood", "sawpit", "orchard", "grove", "figgrove");
+        const rocky = has("quarry", "ironadit", "coalpit", "fells", "orewash", "foundry");
+        const viney = has("vineyard", "highvines", "winepress", "olivepress");
+        const near = (x: number, y: number, d: number) => placeArr.some((p) => Math.hypot(p.x - x, p.y - y) < d);
+        const pick = (): string => { const r = rnd(); if (rocky) return r < 0.42 ? "rock" : r < 0.6 ? "searocks" : r < 0.8 ? "tree-small" : r < 0.9 ? "bush" : "tree-large"; if (viney) return r < 0.38 ? "cypress" : r < 0.66 ? "olive" : r < 0.85 ? "tree-small" : "bush"; if (woody) return r < 0.5 ? "tree-large" : r < 0.82 ? "tree-small" : r < 0.93 ? "bush" : "rock"; return r < 0.36 ? "tree-large" : r < 0.68 ? "tree-small" : r < 0.86 ? "bush" : "rock"; };
+        const target = Math.round(Math.max(45, Math.min(180, (W * H) / 42000))); // more land, more nature
+        let placed = 0;
+        for (let i = 0; i < target * 10 && placed < target; i++) {
+          const x = cx + (rnd() * 2 - 1) * Rx, y = cy + (rnd() * 2 - 1) * Ry; const ins = inside(x, y);
+          if (ins > 0.9 || ins < 0.08) continue; // inland, off the shore
+          if (near(x, y, 90)) continue; // not on top of a building
+          decor.push({ sprite: pick(), x, y, flip: rnd() < 0.5 }); placed++;
+        }
+      }
       let trees: Container[] = [];
       const plantTrees = () => {
         for (const t of trees) t.destroy({ children: true }); trees = [];
