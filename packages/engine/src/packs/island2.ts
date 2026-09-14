@@ -1,0 +1,77 @@
+import type { PlaceKind } from "../types.ts";
+import type { WorldPack, PlaceSpec } from "./island.ts";
+
+/**
+ * Kestrel Isle — a second island pack. A rockier, fish-and-kelp place: rich in
+ * fish, smoked fish, kelp and salt, but poor in grain, flour and timber. That
+ * scarcity is the point — it's why the boat between Kestrel and the island is
+ * worth running (each sells what the other lacks). It keeps the load-bearing
+ * place ids the habit engine falls back on (harbor, inn, market, bakery,
+ * fields, chapel, tavern) and reuses the island's sprite names so the client
+ * can draw it, but everything else — layout, names, economy — is its own.
+ *
+ * Run it as its own instance: UW_PACK=kestrel UW_TOWN_ID=kestrel
+ * UW_TOWN_NAME="Kestrel Isle", with the two instances' UW_HARBORS pointed at
+ * each other so citizens can sail between them.
+ */
+const P = (id: string, name: string, kind: PlaceKind, district: string, sprite: string, x: number, y: number, exits: string[], extra: Partial<PlaceSpec> = {}): PlaceSpec => ({ id, name, kind, district, sprite, x, y, exits, ...extra });
+
+export const KESTREL: WorldPack = {
+  id: "kestrel", name: "Kestrel Isle", size: { w: 2400, h: 1600 },
+  places: [
+    // The quay
+    P("harbor", "the quay", "harbor", "quay", "harbor-office", 480, 1120, ["inn", "market", "smokehouse", "fishhouse", "cliffpath"]),
+    P("inn", "the Kestrel inn", "inn", "quay", "inn", 760, 980, ["harbor", "market"], { sells: [{ item: "soup", base: 2 }, { item: "bread", base: 1 }], beds: { price: 4, capacity: 6 }, stock: { soup: 8, bread: 4, fish: 6 } }),
+    P("fishhouse", "the fish house", "workplace", "quay", "fishhouse", 260, 940, ["harbor"], { sells: [{ item: "fish", base: 1 }], stock: { fish: 16 } }),
+    P("smokehouse", "the smokehouse", "workplace", "quay", "smithy", 620, 1300, ["harbor", "market"], { sells: [{ item: "smoked fish", base: 2 }], stock: { "smoked fish": 8, fish: 4 } }),
+    P("boatshed", "the boat shed", "home", "quay", "boatshed", 320, 1300, ["harbor"], { beds: { price: 0, capacity: 8 } }),
+    // The town
+    P("market", "the fish market", "market", "town", "stall", 1080, 1000, ["harbor", "inn", "bakery", "smokehouse", "tavern", "chapel", "saltpan", "green"], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }, { item: "bread", base: 1 }], stock: { fish: 10, "smoked fish": 6, bread: 6 } }),
+    P("bakery", "the isle bakery", "workplace", "town", "bakery", 1040, 740, ["market"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 12, flour: 8 } }),
+    P("tavern", "the Anchor", "public", "town", "tavern", 1360, 1120, ["market", "green"], { sells: [{ item: "drink", base: 1 }] }),
+    P("chapel", "the sea chapel", "public", "town", "chapel", 1440, 800, ["market"]),
+    P("green", "the green", "public", "town", "well", 1300, 1360, ["market", "tavern", "green-1", "green-2"]),
+    P("green-1", "a plot on the green", "plot", "town", "plot", 1180, 1500, ["green"]),
+    P("green-2", "the far plot on the green", "plot", "town", "plot", 1480, 1480, ["green"]),
+    // The high ground
+    P("saltpan", "the salt pans", "workplace", "flats", "field", 1720, 900, ["market", "fields", "kelpshore"], { sells: [{ item: "salt", base: 2 }], stock: { salt: 12 } }),
+    P("fields", "the thin fields", "workplace", "flats", "field", 1820, 640, ["saltpan"], { stock: { grain: 24 } }),
+    // The cliffs and the shore
+    P("cliffpath", "the cliff path", "public", "cliffs", "searocks", 460, 640, ["harbor", "kelpshore", "lighthouse"]),
+    P("kelpshore", "the kelp shore", "workplace", "cliffs", "bench", 900, 380, ["cliffpath", "saltpan"], { sells: [{ item: "kelp", base: 1 }], stock: { kelp: 20 } }),
+    P("lighthouse", "the Kestrel light", "public", "cliffs", "lighthouse", 300, 300, ["cliffpath", "point-1"]),
+    P("point-1", "the plot on the point", "plot", "cliffs", "plot", 620, 240, ["lighthouse"]),
+  ],
+  jobs: [
+    { id: "fishhouse.gutter", title: "fish gutter", place: "fishhouse", wage: 2, hours: [5, 11], slots: 3 },
+    { id: "smokehouse.smoker", title: "smoker", place: "smokehouse", wage: 3, hours: [7, 15], slots: 2 },
+    { id: "inn.help", title: "help at the inn", place: "inn", wage: 2, hours: [8, 16], slots: 2 },
+    { id: "bakery.cook", title: "cook at the bakery", place: "bakery", wage: 3, hours: [6, 12], slots: 1 },
+    { id: "harbor.dock", title: "dock hand", place: "harbor", wage: 2, hours: [6, 12], slots: 2 },
+    { id: "kelpshore.gatherer", title: "kelp gatherer", place: "kelpshore", wage: 2, hours: [6, 13], slots: 3 },
+    { id: "saltpan.raker", title: "salt raker", place: "saltpan", wage: 2, hours: [8, 15], slots: 2 },
+    { id: "fields.hand", title: "field hand", place: "fields", wage: 2, hours: [7, 14], slots: 2 },
+    { id: "tavern.keep", title: "tavern keeper's help", place: "tavern", wage: 2, hours: [16, 23], slots: 1 },
+  ],
+  float: { inn: 60, market: 20, bakery: 40, fishhouse: 40, smokehouse: 40, saltpan: 30, kelpshore: 30, tavern: 30, fields: 30, harbor: 40 },
+  produce: [
+    { place: "fishhouse", makes: "fish", qty: 14 },
+    { place: "smokehouse", makes: "smoked fish", qty: 6, needs: { item: "fish", qty: 6 } },
+    { place: "kelpshore", makes: "kelp", qty: 8, seasons: ["spring", "summer", "autumn"] }, { place: "kelpshore", makes: "kelp", qty: 3, seasons: ["winter"] },
+    { place: "saltpan", makes: "salt", qty: 4, seasons: ["summer", "autumn"] }, { place: "saltpan", makes: "salt", qty: 1, seasons: ["spring", "winter"] },
+    { place: "fields", makes: "grain", qty: 2, seasons: ["summer", "autumn"] }, { place: "fields", makes: "grain", qty: 1, seasons: ["spring"] },
+    { place: "bakery", makes: "bread", qty: 12, needs: { item: "flour", qty: 1 } },
+    { place: "inn", makes: "soup", qty: 8, needs: { item: "fish", qty: 2 } }, { place: "tavern", makes: "drink", qty: 4 },
+  ],
+  feasts: [{ name: "the kestrel run", month: 5, day: 12, place: "harbor" }, { name: "the salt fair", month: 8, day: 30, place: "market" }, { name: "the light's night", month: 11, day: 2, place: "lighthouse" }],
+  supply: [
+    { from: "fishhouse", to: "market", item: "fish", qty: 6, price: 1, upTo: 10 }, { from: "fishhouse", to: "inn", item: "fish", qty: 4, price: 1, upTo: 8 },
+    { from: "fishhouse", to: "smokehouse", item: "fish", qty: 6, price: 1, upTo: 8 }, { from: "smokehouse", to: "market", item: "smoked fish", qty: 4, price: 2, upTo: 6 },
+    { from: "bakery", to: "market", item: "bread", qty: 6, price: 1, upTo: 8 }, { from: "bakery", to: "inn", item: "bread", qty: 3, price: 1, upTo: 6 },
+    { from: "kelpshore", to: "market", item: "kelp", qty: 6, price: 1, upTo: 10 },
+  ],
+  // Kestrel's income: the sea's harvest. It has no timber, little grain — those come by boat from the island.
+  exports: [
+    { item: "fish", price: 1, keep: 16 }, { item: "smoked fish", price: 2, keep: 8 }, { item: "kelp", price: 1, keep: 8 }, { item: "salt", price: 2, keep: 8 },
+  ],
+};
