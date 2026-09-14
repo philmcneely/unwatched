@@ -31,7 +31,9 @@ export const CAIRNHOLD: WorldPack = {
     P("orewash", "the ore-washing shed", "workplace", "the landing", "fishhouse", 700, 1460, ["harbor", "haul"], { stock: { ore: 8 } }),
     P("boatyard", "the boatyard", "workplace", "the landing", "sawpit", 560, 1560, ["harbor"], { sells: [{ item: "boat", base: 10 }], stock: { timber: 6, boat: 1 } }),
     // Cairn town
-    P("market", "the market square", "market", "cairn town", "stall", 1180, 1160, ["harbor", "inn", "bakery", "tavern", "council", "chapel", "smithy", "wynd", "haul", "fells", "store", "ironmonger"], { sells: [{ item: "bread", base: 1 }, { item: "fish", base: 1 }, { item: "tools", base: 4 }], stock: { bread: 8, fish: 4, tools: 3 } }),
+    P("market", "the market square", "market", "cairn town", "stall", 1180, 1160, ["harbor", "inn", "bakery", "tavern", "council", "chapel", "smithy", "wynd", "haul", "fells", "store", "ironmonger", "tradehouse"], { sells: [{ item: "bread", base: 1 }, { item: "fish", base: 1 }, { item: "tools", base: 4 }], stock: { bread: 8, fish: 4, tools: 3 } }),
+    // the trade house: a merchant ships the isle's gluts of stone, ore and iron to the mainland for the spread
+    P("tradehouse", "the trade house", "shop", "cairn town", "chandlery", 1360, 1000, ["market"], { sells: [{ item: "nails", base: 2 }, { item: "tools", base: 4 }], stock: { nails: 6, tools: 3 } }),
     P("store", "the provisioner", "shop", "cairn town", "chandlery", 1380, 1020, ["market"], { sells: [{ item: "bread", base: 1 }, { item: "fish", base: 1 }, { item: "lamp oil", base: 2 }], stock: { bread: 8, fish: 4, "lamp oil": 6 } }),
     P("ironmonger", "the ironmonger", "shop", "cairn town", "stall", 1000, 1080, ["market"], { sells: [{ item: "nails", base: 2 }, { item: "tools", base: 4 }, { item: "rope", base: 3 }], stock: { nails: 12, tools: 6, rope: 6 } }),
     P("bakery", "the wee bakery", "workplace", "cairn town", "bakery", 1150, 880, ["market"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 12, flour: 8 } }),
@@ -82,8 +84,9 @@ export const CAIRNHOLD: WorldPack = {
     { id: "tavern.keep", title: "tavern keeper's help", place: "tavern", wage: 2, hours: [16, 23], slots: 1 },
     { id: "fields.hand", title: "field hand", place: "fields", wage: 2, hours: [7, 14], slots: 2 },
     { id: "fishhouse.gutter", title: "fish gutter", place: "fishhouse", wage: 2, hours: [5, 11], slots: 1 },
+    { id: "tradehouse.merchant", title: "merchant", place: "tradehouse", wage: 3, hours: [8, 16], slots: 1 },
   ],
-  float: { inn: 60, market: 20, bakery: 40, smithy: 40, foundry: 50, ironadit: 30, coalpit: 30, quarry: 30, charcoal: 30, orewash: 30, chandlery: 30, store: 40, ironmonger: 40, tavern: 30, fields: 30, fishhouse: 30, boatyard: 40, harbor: 40 },
+  float: { inn: 60, market: 20, bakery: 40, smithy: 40, foundry: 50, ironadit: 30, coalpit: 30, quarry: 30, charcoal: 30, orewash: 30, chandlery: 30, store: 40, ironmonger: 40, tavern: 30, fields: 30, fishhouse: 30, boatyard: 40, harbor: 40, tradehouse: 60 },
   produce: [
     // the hill's wealth: rock, ore and coal, all year, most of it for the boat
     { place: "quarry", makes: "stone", qty: 4 },

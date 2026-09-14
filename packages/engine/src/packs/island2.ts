@@ -32,7 +32,9 @@ export const KESTREL: WorldPack = {
     // the isle wants boats badly but has no wood of its own — the yard runs on imported timber
     P("boatyard", "the boatyard", "workplace", "quay", "sawpit", 660, 1180, ["harbor"], { stock: { timber: 6 } }),
     // The town — the market, the shops, the trades, and the homes round the green.
-    P("market", "the fish market", "market", "town", "stall", 1080, 1000, ["fishmonger", "drygoods", "bakery", "tavern", "chapel", "saltpan", "green"], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }, { item: "bread", base: 1 }], stock: { fish: 10, "smoked fish": 6, bread: 6 } }),
+    P("market", "the fish market", "market", "town", "stall", 1080, 1000, ["fishmonger", "drygoods", "bakery", "tavern", "chapel", "saltpan", "green", "tradehouse"], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }, { item: "bread", base: 1 }], stock: { fish: 10, "smoked fish": 6, bread: 6 } }),
+    // the trade house: a merchant ships the isle's gluts of fish and salt to the mainland for the spread
+    P("tradehouse", "the trade house", "shop", "town", "chandlery", 1240, 880, ["market"], { sells: [{ item: "rope", base: 3 }, { item: "salt", base: 2 }], stock: { rope: 4, salt: 6 } }),
     P("fishmonger", "the fishmonger", "shop", "town", "fishhouse", 900, 1140, [], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }], stock: { fish: 8, "smoked fish": 6 } }),
     P("drygoods", "the dry store", "shop", "town", "stall", 1240, 1180, [], { sells: [{ item: "bread", base: 1 }, { item: "salt", base: 2 }], stock: { bread: 8, salt: 8 } }),
     P("bakery", "the isle bakery", "workplace", "town", "bakery", 1040, 740, ["chapel"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 12, flour: 8 } }),
@@ -65,8 +67,9 @@ export const KESTREL: WorldPack = {
     { id: "saltpan.raker", title: "salt raker", place: "saltpan", wage: 2, hours: [8, 15], slots: 2 },
     { id: "fields.hand", title: "field hand", place: "fields", wage: 2, hours: [7, 14], slots: 2 },
     { id: "tavern.keep", title: "tavern keeper's help", place: "tavern", wage: 2, hours: [16, 23], slots: 1 },
+    { id: "tradehouse.merchant", title: "merchant", place: "tradehouse", wage: 3, hours: [8, 16], slots: 1 },
   ],
-  float: { inn: 60, market: 20, bakery: 40, fishhouse: 40, smokehouse: 40, boatyard: 40, netloft: 30, fishmonger: 30, drygoods: 30, saltpan: 30, kelpshore: 30, tavern: 30, fields: 30, harbor: 40 },
+  float: { inn: 60, market: 20, bakery: 40, fishhouse: 40, smokehouse: 40, boatyard: 40, netloft: 30, fishmonger: 30, drygoods: 30, saltpan: 30, kelpshore: 30, tavern: 30, fields: 30, harbor: 40, tradehouse: 50 },
   produce: [
     { place: "fishhouse", makes: "fish", qty: 14 },
     { place: "smokehouse", makes: "smoked fish", qty: 6, needs: { item: "fish", qty: 6 } },

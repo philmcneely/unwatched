@@ -28,7 +28,9 @@ export const VINEHAVEN: WorldPack = {
     P("boatshed", "the boat shed", "home", "the landing", "boatshed", 360, 1440, ["harbor"], { beds: { price: 0, capacity: 8 } }),
     P("coast", "the shore road", "public", "the landing", "searocks", 700, 980, ["harbor", "terracewalk"]),
     // The Sun Market — the old town, its fountain square and its trades
-    P("market", "the sun market", "market", "old town", "stall", 1300, 1150, ["harbor", "inn", "cellars", "bakery", "tavern", "chapel", "council", "weaver", "square", "hillroad", "terracewalk", "store", "wineshop", "drygoods"], { sells: [{ item: "bread", base: 1 }, { item: "figs", base: 1 }, { item: "olives", base: 1 }, { item: "honey", base: 2 }, { item: "wine", base: 2 }], stock: { bread: 10, figs: 8, olives: 8, honey: 6, wine: 6 } }),
+    P("market", "the sun market", "market", "old town", "stall", 1300, 1150, ["harbor", "inn", "cellars", "bakery", "tavern", "chapel", "council", "weaver", "square", "hillroad", "terracewalk", "store", "wineshop", "drygoods", "tradehouse"], { sells: [{ item: "bread", base: 1 }, { item: "figs", base: 1 }, { item: "olives", base: 1 }, { item: "honey", base: 2 }, { item: "wine", base: 2 }], stock: { bread: 10, figs: 8, olives: 8, honey: 6, wine: 6 } }),
+    // the trade house: a merchant ships the isle's gluts of wine, oil and honey to the mainland for the spread
+    P("tradehouse", "the trade house", "shop", "old town", "chandlery", 1480, 1010, ["market"], { sells: [{ item: "wine", base: 2 }, { item: "cloth", base: 3 }], stock: { wine: 6, cloth: 4 } }),
     P("bakery", "Rosa's bakery", "workplace", "old town", "bakery", 1280, 900, ["market"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 18, flour: 20 } }),
     P("tavern", "the Golden Cask", "public", "old town", "tavern", 1560, 1280, ["market", "square"], { sells: [{ item: "wine", base: 1 }], stock: { wine: 12 } }),
     P("chapel", "the sun chapel", "public", "old town", "chapel", 1780, 900, ["market", "council"]),
@@ -79,8 +81,9 @@ export const VINEHAVEN: WorldPack = {
     { id: "apiary.keeper", title: "keeper at the apiary", place: "apiary", wage: 2, hours: [8, 15], slots: 1 },
     { id: "fields.hand", title: "field hand", place: "fields", wage: 2, hours: [7, 15], slots: 3 },
     { id: "mill.hand", title: "mill hand", place: "mill", wage: 3, hours: [7, 14], slots: 1 },
+    { id: "tradehouse.merchant", title: "merchant", place: "tradehouse", wage: 3, hours: [8, 16], slots: 1 },
   ],
-  float: { inn: 60, market: 20, bakery: 40, cellars: 40, harbor: 40, boatyard: 40, tavern: 30, weaver: 40, vineyard: 40, highvines: 30, winepress: 50, grove: 40, figgrove: 30, olivepress: 50, apiary: 30, fields: 30, mill: 30 },
+  float: { inn: 60, market: 20, bakery: 40, cellars: 40, harbor: 40, boatyard: 40, tavern: 30, weaver: 40, vineyard: 40, highvines: 30, winepress: 50, grove: 40, figgrove: 30, olivepress: 50, apiary: 30, fields: 30, mill: 30, tradehouse: 60 },
   produce: [
     // the vines: grapes ripen in the long warm months, thinning to almost nothing in winter
     { place: "vineyard", makes: "grapes", qty: 6, seasons: ["summer", "autumn"] }, { place: "vineyard", makes: "grapes", qty: 2, seasons: ["spring"] }, { place: "vineyard", makes: "grapes", qty: 1, seasons: ["winter"] },

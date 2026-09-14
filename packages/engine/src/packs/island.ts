@@ -29,7 +29,9 @@ export const ISLAND: WorldPack = {
     P("boatshed", "the boat shed", "home", "harbor", "boatshed", 420, 1400, ["harbor"], { beds: { price: 0, capacity: 8 } }),
     P("fishhouse", "the fish house", "workplace", "harbor", "fishhouse", 300, 1000, ["harbor"], { sells: [{ item: "fish", base: 1 }] , stock: { fish: 12 } }),
     // Old town
-    P("market", "the market square", "market", "old town", "stall", 1180, 1100, ["harbor", "inn", "bakery", "chandlery", "tavern", "council", "hill", "chapel", "smithy", "lane"], { sells: [{ item: "bread", base: 1 }, { item: "apples", base: 1 }, { item: "fish", base: 1 }] , stock: { bread: 10, apples: 8, fish: 8 } }),
+    P("market", "the market square", "market", "old town", "stall", 1180, 1100, ["harbor", "inn", "bakery", "chandlery", "tavern", "council", "hill", "chapel", "smithy", "lane", "tradehouse"], { sells: [{ item: "bread", base: 1 }, { item: "apples", base: 1 }, { item: "fish", base: 1 }] , stock: { bread: 10, apples: 8, fish: 8 } }),
+    // the trade house: a merchant buys up the island's gluts and puts them on the mainland boat for the spread
+    P("tradehouse", "the trade house", "shop", "old town", "chandlery", 1360, 940, ["market"], { sells: [{ item: "planks", base: 4 }, { item: "rope", base: 3 }], stock: { planks: 6, rope: 4 } }),
     P("bakery", "Ilić's bakery", "workplace", "old town", "bakery", 1160, 840, ["market"], { sells: [{ item: "bread", base: 1 }] , stock: { bread: 20, flour: 24 } }),
     P("tavern", "the tavern", "public", "old town", "tavern", 1500, 1200, ["market", "lane"], { sells: [{ item: "drink", base: 1 }] }),
     P("council", "the council hall", "civic", "old town", "council", 1520, 880, ["market", "chapel"]),
@@ -74,8 +76,9 @@ export const ISLAND: WorldPack = {
     { id: "quarry.hand", title: "quarryman", place: "quarry", wage: 3, hours: [7, 14], slots: 2 },
     { id: "boatyard.wright", title: "shipwright", place: "boatyard", wage: 3, hours: [8, 16], slots: 2 },
     { id: "harbor.ferry", title: "ferryman", place: "harbor", wage: 3, hours: [6, 14], slots: 2 },
+    { id: "tradehouse.merchant", title: "merchant", place: "tradehouse", wage: 3, hours: [8, 16], slots: 1 },
   ],
-  float: { inn: 60, bakery: 40, fields: 40, mill: 40, harbor: 40, chandlery: 30, tavern: 30, fishhouse: 30, smithy: 30, orchard: 30, pinewood: 30, sawpit: 30, quarry: 30, market: 20, boatyard: 50 },
+  float: { inn: 60, bakery: 40, fields: 40, mill: 40, harbor: 40, chandlery: 30, tavern: 30, fishhouse: 30, smithy: 30, orchard: 30, pinewood: 30, sawpit: 30, quarry: 30, market: 20, boatyard: 50, tradehouse: 60 },
   // a shift makes something; the mill and the bakery and the sawpit make theirs out of someone else's
   produce: [
     { place: "fields", makes: "grain", qty: 6, seasons: ["summer", "autumn"] }, { place: "fields", makes: "grain", qty: 3, seasons: ["spring"] }, { place: "fields", makes: "grain", qty: 1, seasons: ["winter"] },

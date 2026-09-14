@@ -13,22 +13,22 @@ const none: Brain = {
 
 // how much money is on the island, to prove the merchant conserves it (bar what the mainland mints)
 const island = (town: Town) => [...town.agents.values()].reduce((s, x) => s + x.coins, 0) + [...town.places.values()].reduce((s, p) => s + p.treasury, 0);
+const run = (town: Town) => (town as unknown as { merchants(): void }).merchants();
 
 describe("the trade house merchant", () => {
   it("buys a glut cheap and ships it to the mainland for the spread, conserving coins bar what the mainland mints", () => {
     const town = new Town({ seed: 21, brain: none });
     town.weather = "clear"; // the boat crosses, so the merchant can reach the mainland
-    const house = town.places.get("market")!; // the market doubles as the trade house
+    const house = town.places.get("tradehouse")!; // the island's own trade house (from the pack)
     const merchant = town.addAgent({ persona: persona("Ada Vance"), owner: "m0" });
     house.owner = merchant.id; merchant.coins = 100; // the trade house's purse
-    town.jobs.set("market.merchant", { id: "market.merchant", place: "market", title: "merchant", wage: 3, hours: [8, 16], slots: 1, holders: [] });
-    // a glutted shelf of timber elsewhere: 20 in stock against a plain target of 8, base 2, so its price is discounted and its half-shelf buy price is a coin
+    // a glutted shelf of timber at the inn: 20 in stock against a plain target of 8, base 2, so its price is discounted and its half-shelf buy price is a coin
     const shelf = town.places.get("inn")!; shelf.owner = null; shelf.treasury = 50;
     shelf.sells = [{ item: "timber", base: 2 }]; shelf.stock = { timber: 20 };
     expect(town.buyPrice(shelf, "timber")).toBe(1); // the glut has made it a bargain
     const before = island(town); const mintedBefore = town.minted;
 
-    (town as unknown as { merchants(): void }).merchants();
+    run(town);
 
     // it took 4 (capped per item), paying the shelf 4, and shipped them to the mainland at the export price (2 each = 8)
     expect(shelf.stock.timber).toBe(16);
@@ -43,11 +43,10 @@ describe("the trade house merchant", () => {
   it("does no mainland trade in a storm — the boat is not crossing", () => {
     const town = new Town({ seed: 22, brain: none });
     town.weather = "storm";
-    const house = town.places.get("market")!; const merchant = town.addAgent({ persona: persona("Storm-bound"), owner: "m1" });
+    const house = town.places.get("tradehouse")!; const merchant = town.addAgent({ persona: persona("Storm-bound"), owner: "m1" });
     house.owner = merchant.id; merchant.coins = 100;
-    town.jobs.set("market.merchant", { id: "market.merchant", place: "market", title: "merchant", wage: 3, hours: [8, 16], slots: 1, holders: [] });
     const shelf = town.places.get("inn")!; shelf.sells = [{ item: "timber", base: 2 }]; shelf.stock = { timber: 20 };
-    (town as unknown as { merchants(): void }).merchants();
+    run(town);
     expect(shelf.stock.timber).toBe(20); // nothing moved
     expect(merchant.coins).toBe(100);
   });
@@ -55,13 +54,14 @@ describe("the trade house merchant", () => {
   it("leaves a glut alone when there is no spread to be had", () => {
     const town = new Town({ seed: 23, brain: none });
     town.weather = "clear";
-    const house = town.places.get("market")!; const merchant = town.addAgent({ persona: persona("No-margin"), owner: "m2" });
+    const house = town.places.get("tradehouse")!; const merchant = town.addAgent({ persona: persona("No-margin"), owner: "m2" });
     house.owner = merchant.id; merchant.coins = 100;
-    town.jobs.set("market.merchant", { id: "market.merchant", place: "market", title: "merchant", wage: 3, hours: [8, 16], slots: 1, holders: [] });
     // bread exports at a coin and buys at a coin: the merchant would pay as much as it earns, so it does not bother
-    const shelf = town.places.get("inn")!; shelf.sells = [{ item: "bread", base: 1 }]; shelf.stock = { bread: 20 };
-    (town as unknown as { merchants(): void }).merchants();
+    const shelf = town.places.get("inn")!; shelf.owner = null; shelf.sells = [{ item: "bread", base: 1 }]; shelf.stock = { bread: 20 };
+    const shelfTill = shelf.treasury;
+    run(town);
     expect(shelf.stock.bread).toBe(20);
-    expect(merchant.coins).toBe(100);
+    expect(merchant.coins).toBe(100); // no spread anywhere means the purse never moves
+    expect(shelf.treasury).toBe(shelfTill);
   });
 });
