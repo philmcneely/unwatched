@@ -133,6 +133,8 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       const atParam = typeof location !== "undefined" ? new URLSearchParams(location.search).get("at") : null; const zoomParam = typeof location !== "undefined" ? previewZoom(new URLSearchParams(location.search).get("zoom")) : NaN;
       const parkAt = (spec: string | null) => { if (!spec) return null; const [id, dx, dy] = spec.split(","); const p = places.get(id ?? ""); return p ? { x: p.x + (Number(dx) || 0), y: p.y + (Number(dy) || 0) } : null; };
       const parked = parkAt(atParam);
+      // ?shot=1 : a deterministic whole-island frame for snapshots — the entire island centred with sea all around, camera snapped instantly (no ease), so a headless capture never catches it mid-zoom
+      const shot = typeof location !== "undefined" && new URLSearchParams(location.search).get("shot") === "1";
       // a filmed move: ?to=place,dx,dy&zoomTo=1.8&over=8&delay=1 glides the camera from `at` to `to` over that many seconds, eased both ends
       const q = typeof location !== "undefined" ? new URLSearchParams(location.search) : null;
       const moveTo_ = parkAt(q?.get("to") ?? null); const zoomToParam = previewZoom(q?.get("zoomTo")); const moveOver = Number(q?.get("over")) || 8; const moveDelay = Number(q?.get("delay")) || 0.8; const moveStart = performance.now();
@@ -514,6 +516,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         const tx = Wd / 2 - fx * cam.zoom, ty = Hd / 2 - fy * cam.zoom;
         const cutting = viewRef.current === "cinema" && tick - cutAt < 90; // a new moment is a cut, not a crawl
         const ease = hand ? 1 : viewRef.current === "cinema" ? (cutting ? 0.09 : 0.02) : 0.08; cam.x += (tx - cam.x) * ease; cam.y += (ty - cam.y) * ease;
+        if (shot) { const sz = Math.min(Wd / (W * 1.3), Hd / (H * 1.45)); cam.zoom = sz; cam.x = Wd / 2 - (W / 2) * sz; cam.y = Hd / 2 - (H / 2 + 40) * sz; } // whole island, centred, sea all around — snapped, no ease
         world.scale.set(cam.zoom); world.position.set(cam.x, cam.y); lightArea.x = -cam.x / cam.zoom; lightArea.y = -cam.y / cam.zoom; lightArea.width = Wd / cam.zoom; lightArea.height = Hd / cam.zoom; // the screen, in world space, for the light filters
         // parallax: what is far moves less than the island, what is near moves more, measured from where the camera looks
         const cwx = (Wd / 2 - cam.x) / cam.zoom, cwy = (Hd / 2 - cam.y) / cam.zoom;

@@ -8,7 +8,7 @@ const HUB = (process.env.HUB_URL || "http://uw2-hub:4600").replace(/\/$/, "");
 const OUT = process.env.SNAP_DIR || "/data/snaps";
 const CHROMIUM = process.env.CHROMIUM || "/usr/bin/chromium";
 const INTERVAL = Math.max(5, parseInt(process.env.INTERVAL_MIN || "45", 10)) * 60 * 1000;
-const SETTLE = Math.max(3000, parseInt(process.env.SETTLE_MS || "22000", 10)); // the map camera eases to the whole-island zoom over ~20s; wait it out before the shot
+const SETTLE = Math.max(3000, parseInt(process.env.SETTLE_MS || "8000", 10)); // ?shot=1 snaps the camera instantly; just let the buildings/looks draw before the shot
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function pass(browser) {
@@ -29,7 +29,7 @@ async function pass(browser) {
       const W = 1280, H = Math.round(W * sh / sw);
       await page.setViewport({ width: W, height: H, deviceScaleFactor: 1 });
       // NOT networkidle: the island holds a WebSocket open, so the network never goes idle. DOM + a fixed settle.
-      await page.goto(`${i.url}/film?view=map&clean=1&fx=0`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.goto(`${i.url}/film?view=map&shot=1&clean=1&fx=0`, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.addStyleTag({ content: "body>*:not(main){display:none!important}" }); // drop analytics/feedback chrome
       await sleep(SETTLE);
       const tmp = path.join(OUT, `.${i.id}.tmp.png`), fin = path.join(OUT, `${i.id}.png`);
