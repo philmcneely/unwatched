@@ -192,12 +192,18 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           if (ins < 0.25 || ins > 0.8) continue;
           if (nearPlace(x, y, "market", 260) || nearPlace(x, y, "harbor", 260)) continue;
           placed++;
-          const w = 180 + rnd() * 140, h = w * (0.38 + rnd() * 0.12);
-          const base = rnd() < 0.5 ? C.grass : C.earth;
-          relief.ellipse(x - w * 0.14, y + h * 0.3, w * 0.55, h * 0.36).fill({ color: darken(C.earthEdge, 0.3), alpha: 0.22 }); // soft cast shadow, down-left
-          relief.ellipse(x, y, w * 0.5, h * 0.44).fill(darken(base, 0.16)); // dark base blob
-          relief.ellipse(x - w * 0.04, y - h * 0.14, w * 0.37, h * 0.3).fill(base); // the rise itself
-          relief.ellipse(x + w * 0.1, y - h * 0.24, w * 0.2, h * 0.15).fill({ color: lighten(base, 0.28), alpha: 0.8 }); // sunlit crown, up-right
+          const w = 120 + rnd() * 140, h = w * (0.5 + rnd() * 0.18);
+          const base = rnd() < 0.45 ? C.forest : C.grass;
+          const baseTone = darken(base, 0.3), crownTone = lighten(base, 0.4), rimTone = lighten(base, 0.58);
+          // a soft cast shadow on the ground, down-left, so the mound reads as raised rather than a flat patch
+          relief.ellipse(x - w * 0.24, y + h * 0.16, w * 0.52, h * 0.26).fill({ color: darken(C.earth, 0.4), alpha: 0.32 });
+          // the mound itself: one rounded dome silhouette rising off the ground, dark where it turns away from the light
+          relief.moveTo(x - w / 2, y).quadraticCurveTo(x - w / 2, y - h, x, y - h).quadraticCurveTo(x + w / 2, y - h, x + w / 2, y).closePath().fill(baseTone);
+          // a sunlit crown, smaller and offset up-right, so the light wraps clearly around one side of the bump
+          const cw = w * 0.72, ch = h * 0.78, cx2 = x + w * 0.1, cy2 = y - h * 0.14;
+          relief.moveTo(cx2 - cw / 2, cy2).quadraticCurveTo(cx2 - cw / 2, cy2 - ch, cx2, cy2 - ch).quadraticCurveTo(cx2 + cw / 2, cy2 - ch, cx2 + cw / 2, cy2).closePath().fill({ color: crownTone, alpha: 0.9 });
+          // a crisp, brighter rim right at the rounded top, where the light catches the crest
+          relief.moveTo(cx2 - cw * 0.22, cy2 - ch * 0.86).quadraticCurveTo(cx2 + cw * 0.05, cy2 - ch, cx2 + cw * 0.3, cy2 - ch * 0.82).stroke({ width: Math.max(2, w * 0.025), color: rimTone, alpha: 0.85, cap: "round" });
         }
         // a small mining range: overlapping shaded peaks near the average of the island's mining places
         if (mining) {
