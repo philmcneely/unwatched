@@ -176,6 +176,54 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       const seasonNow = forcedSeason ?? clockRef.current?.season ?? townView.season ?? "summer";
       // the ground: kinds blended where they meet, tufts and stones and flowers, contours on the hill, a wrack line on the shore
       const ground = drawGround({ W, H, cx, cy, inside, outline, places, oldTown: OLD_TOWN }, seasonNow); world.addChild(ground);
+      // relief: a few soft inland hills on every island, and (where the island mines) a small shaded peak cluster near the workings.
+      // Drawn once, seeded like the coastline, straight onto `world` — behind roads, buildings and trees, on top of the ground.
+      {
+        const relief = new Graphics(); world.addChild(relief);
+        const P = [...places.values()];
+        const has = (...ids: string[]) => ids.some((id) => P.some((p) => p.id === id));
+        const mining = has("quarry", "ironadit", "coalpit", "fells", "orewash", "foundry");
+        const nearPlace = (x: number, y: number, id: string, d: number) => { const p = places.get(id); return !!p && Math.hypot(p.x - x, p.y - y) < d; };
+        const darken = (c: number, t: number) => mix(c, 0x000000, t), lighten = (c: number, t: number) => mix(c, 0xffffff, t);
+        // a handful of gentle mounds, well inland and clear of the market and the harbor, so they sit behind the town rather than on it
+        const hillCount = 3 + Math.floor(rnd() * 4);
+        for (let tries = 0, placed = 0; tries < hillCount * 15 && placed < hillCount; tries++) {
+          const x = cx + (rnd() * 2 - 1) * Rx, y = cy + (rnd() * 2 - 1) * Ry, ins = inside(x, y);
+          if (ins < 0.25 || ins > 0.8) continue;
+          if (nearPlace(x, y, "market", 260) || nearPlace(x, y, "harbor", 260)) continue;
+          placed++;
+          const w = 180 + rnd() * 140, h = w * (0.38 + rnd() * 0.12);
+          const base = rnd() < 0.5 ? C.grass : C.earth;
+          relief.ellipse(x - w * 0.14, y + h * 0.3, w * 0.55, h * 0.36).fill({ color: darken(C.earthEdge, 0.3), alpha: 0.22 }); // soft cast shadow, down-left
+          relief.ellipse(x, y, w * 0.5, h * 0.44).fill(darken(base, 0.16)); // dark base blob
+          relief.ellipse(x - w * 0.04, y - h * 0.14, w * 0.37, h * 0.3).fill(base); // the rise itself
+          relief.ellipse(x + w * 0.1, y - h * 0.24, w * 0.2, h * 0.15).fill({ color: lighten(base, 0.28), alpha: 0.8 }); // sunlit crown, up-right
+        }
+        // a small mining range: overlapping shaded peaks near the average of the island's mining places
+        if (mining) {
+          const mineIds = ["quarry", "ironadit", "coalpit", "fells", "orewash", "foundry"];
+          const mines = P.filter((p) => mineIds.includes(p.id));
+          if (mines.length) {
+            const mx = mines.reduce((s, p) => s + p.x, 0) / mines.length, my = mines.reduce((s, p) => s + p.y, 0) / mines.length;
+            const peakCount = 2 + Math.floor(rnd() * 3);
+            const peaks: { x: number; y: number; w: number; h: number }[] = [];
+            for (let i = 0; i < peakCount; i++) {
+              let x = mx, y = my;
+              for (let tries = 0; tries < 20; tries++) { x = mx + (rnd() * 2 - 1) * 150; y = my + (rnd() * 2 - 1) * 110; if (inside(x, y) < 0.8) break; }
+              peaks.push({ x, y, w: 0, h: 0 });
+            }
+            for (const pk of peaks) { pk.h = 160 + rnd() * 100; pk.w = pk.h * (0.55 + rnd() * 0.25); }
+            peaks.sort((a, b) => a.y - b.y); // draw the further-back peaks first, so nearer ones overlap on top and it reads as a ridge
+            for (const { x, y, w, h } of peaks) {
+              const rockDark = darken(C.rock, 0.32), rockLit = lighten(C.rock, 0.06), cap = lighten(C.rock, 0.5);
+              relief.ellipse(x - w * 0.2, y + h * 0.05, w * 0.6, h * 0.16).fill({ color: darken(C.rock, 0.45), alpha: 0.25 }); // cast shadow, down-left
+              relief.moveTo(x - w / 2, y).quadraticCurveTo(x - w * 0.14, y - h * 0.55, x, y - h).quadraticCurveTo(x + w * 0.14, y - h * 0.55, x + w / 2, y).closePath().fill(rockDark); // dark rock base
+              relief.moveTo(x - w * 0.04, y - h * 0.04).quadraticCurveTo(x + w * 0.08, y - h * 0.62, x + w * 0.07, y - h * 0.94).quadraticCurveTo(x + w * 0.24, y - h * 0.5, x + w * 0.4, y).closePath().fill({ color: rockLit, alpha: 0.6 }); // lit face, upper-right
+              relief.moveTo(x - w * 0.09, y - h * 0.78).quadraticCurveTo(x, y - h * 1.03, x + w * 0.09, y - h * 0.78).quadraticCurveTo(x, y - h * 0.62, x - w * 0.09, y - h * 0.78).closePath().fill({ color: cap, alpha: 0.85 }); // pale cap
+            }
+          }
+        }
+      }
       // roads: an edge, a centre, cobbles in courses in the old town; and over them the wear, pale where feet actually go
       const segs = segmentsOf(places, OLD_TOWN); world.addChild(drawRoads(segs));
       const wear = new Wear(segs, (sg) => { const [a, b] = sg.key.split("|"); const hub = (id?: string) => id === "market" || id === "harbor" || id === "lane"; return (hub(a) ? 30 : 0) + (hub(b) ? 30 : 0) + (sg.cobbled ? 20 : 6); }); world.addChild(wear);
