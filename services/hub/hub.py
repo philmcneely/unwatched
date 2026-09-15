@@ -50,6 +50,8 @@ def init_db():
         icols = {r[1] for r in c.execute("PRAGMA table_info(islands)")}
         if "size" not in icols:
             c.execute("ALTER TABLE islands ADD COLUMN size TEXT")
+        if "distress" not in icols:
+            c.execute("ALTER TABLE islands ADD COLUMN distress INTEGER DEFAULT 0")
         c.execute("""CREATE TABLE IF NOT EXISTS relations (
             from_id TEXT, to_id TEXT, stance TEXT, friction REAL, blockade INTEGER,
             tariff REAL, updated_at REAL, PRIMARY KEY (from_id, to_id) )""")
@@ -75,6 +77,7 @@ def island_row(r):
         "population": r["population"] or 0,
         "minted": r["minted"] or 0, "burned": r["burned"] or 0,
         "flourShortage": bool(r["flour_shortage"]),
+        "distress": bool(r["distress"]) if "distress" in r.keys() else False,
         "mayor": r["mayor"],
         "boat": json.loads(r["boat"] or '{"running":false,"held":false}'),
         "size": json.loads(r["size"]) if r["size"] else None,
@@ -104,9 +107,10 @@ def update_state(island_id, b):
             c.execute("INSERT INTO islands (id,name,harbors,updated_at) VALUES (?,?,?,?)",
                       (island_id, island_id, "[]", now()))
         c.execute("""UPDATE islands SET last_seen=?, day=?, weather=?, population=?,
-              minted=?, burned=?, flour_shortage=?, mayor=?, boat=?, updated_at=? WHERE id=?""",
+              minted=?, burned=?, flour_shortage=?, distress=?, mayor=?, boat=?, updated_at=? WHERE id=?""",
             (now(), b.get("day", 0), b.get("weather", "unknown"), b.get("population", 0),
              b.get("minted", 0), b.get("burned", 0), 1 if b.get("flourShortage") else 0,
+             1 if b.get("distress") else 0,
              b.get("mayor"), json.dumps(b.get("boat", {"running": False, "held": False})),
              now(), island_id))
 

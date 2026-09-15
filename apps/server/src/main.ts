@@ -103,6 +103,17 @@ async function hubRelation(to: string): Promise<Policy> {
   } catch { /* fall through to open — a hub blip never blocks a crossing */ }
   relStats.set(to, { at: Date.now(), policy: OPEN }); return OPEN;
 }
+// Which siblings are in distress (wrecked/starving), per the hub — so a friendly neighbour can send food aid. Cached 60s; empty without a hub.
+let islandsCache: { at: number; map: Record<string, boolean> } | null = null;
+async function hubDistress(): Promise<Record<string, boolean>> {
+  if (!HUB_URL) return {};
+  if (islandsCache && Date.now() - islandsCache.at < 60000) return islandsCache.map;
+  try {
+    const res = await fetch(`${HUB_URL}/world/islands`, { headers: hubHeaders, signal: AbortSignal.timeout(4000) });
+    if (res.ok) { const d = (await res.json()) as { islands?: { id: string; distress?: boolean }[] }; const m: Record<string, boolean> = {}; for (const i of d.islands ?? []) m[i.id] = !!i.distress; islandsCache = { at: Date.now(), map: m }; return m; }
+  } catch { /* fall through */ }
+  islandsCache = islandsCache ?? { at: Date.now(), map: {} }; return islandsCache.map;
+}
 
 const harborStats = new Map<string, { at: number; data: Record<string, unknown> | null }>();
 async function harborTown(h: { id: string; url: string }): Promise<Record<string, unknown> | null> {
@@ -377,6 +388,14 @@ async function sailCargo(): Promise<void> {
       const { taken } = (await sent.json()) as { taken: { item: string; qty: number }[] };
       // a tariff toward `to` skims the crossing: the sender books the goods at a reduced price, so its harbor/owner nets less
       town.ship(load.flatMap((o) => { const t = taken.find((x) => x.item === o.item); return t ? [{ ...o, qty: t.qty, price: rel.tariff > 0 ? Math.max(0, Math.round(o.price * (1 - rel.tariff))) : o.price }] : []; }), h.name);
+      // food AID: a friendly neighbour (ally or neutral) in distress gets a free parcel from our own stores; rivals don't send it, enemies are already blockaded
+      if ((rel.stance === "ally" || rel.stance === "neutral") && (await hubDistress())[h.id]) {
+        const aid = town.foodAid();
+        if (aid.length) {
+          const gift = await fetch(`${h.url}/api/boat/cargo`, { method: "POST", headers: { "Content-Type": "application/json", "X-Boat": BOAT_SECRET }, body: JSON.stringify({ from: TOWN_NAME, items: aid.map(({ item, qty, price }) => ({ item, qty, price })) }), signal: AbortSignal.timeout(8000) });
+          if (gift.ok) { const { taken: got } = (await gift.json()) as { taken: { item: string; qty: number }[] }; const shipped = aid.flatMap((o) => { const t = got.find((x) => x.item === o.item); return t && t.qty > 0 ? [{ ...o, qty: t.qty }] : []; }); if (shipped.length) { town.ship(shipped, h.name); log(`sent food aid to ${h.id}: ${shipped.map((s) => `${s.qty} ${s.item}`).join(", ")}`); } } // ship() emits the boat.cargo event; the gift shows on both islands
+        }
+      }
     } catch (err) { log(`cargo to ${h.id}: ${(err as Error).message}`); }
   }
 }
@@ -839,7 +858,7 @@ async function hubPost(path: string, body: unknown): Promise<void> {
 }
 // identity + topology (rarely changes); live state (day/weather/economy) for the overview map
 const registerWithHub = () => hubPost("/islands", { id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: ISLAND_URL, size: PACK.size, harbors: HARBORS.map((h) => ({ id: h.id, url: h.url })) });
-const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
+const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, distress: town.distressed, mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
 if (HUB_URL) {
   log(`registering with hub at ${HUB_URL}`);
   void registerWithHub().then(reportState);

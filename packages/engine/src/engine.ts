@@ -1535,6 +1535,20 @@ export class Town {
     for (const place of this.places.values()) for (const ex of this.pack.exports) { const surplus = (place.stock[ex.item] ?? 0) - ex.keep; if (surplus > 0) out.push({ item: ex.item, qty: surplus, price: ex.price, place: place.id }); }
     return out;
   }
+  /** An island in trouble: no flour and no bread, or its harbour/farms wrecked, or too many going hungry. Neighbours can see this (via the hub) and send food aid. */
+  get distressed(): boolean {
+    if (this.flourShortage) return true;
+    if (["fields", "harbor", "fishhouse", "fishquay", "bakery", "mill", "orchard"].some((id) => { const p = this.places.get(id); return !!(p?.brokenUntil && p.brokenUntil > this.day); })) return true;
+    const n = this.agents.size; if (!n) return false;
+    return [...this.agents.values()].filter((a) => a.starving >= 1).length > n * 0.3;
+  }
+  /** Food this island can spare to feed a neighbour in crisis — off its own shelves, past a slim reserve. A gift (price 0), not a sale. */
+  foodAid(): { item: string; qty: number; price: number; place: PlaceId }[] {
+    const FOOD = new Set(["bread", "fish", "smoked fish", "flour", "grain", "apples", "soup"]);
+    const out: { item: string; qty: number; price: number; place: PlaceId }[] = [];
+    for (const place of this.places.values()) for (const [item, qty] of Object.entries(place.stock)) { if (!FOOD.has(item) || qty <= 4) continue; out.push({ item, qty: Math.min(qty - 3, 6), price: 0, place: place.id }); }
+    return out;
+  }
   /** What the island is short of: room on the shelves the cart fills, that the island itself is not filling. */
   cargoWants(): { item: string; qty: number }[] {
     const by = new Map<string, number>();
