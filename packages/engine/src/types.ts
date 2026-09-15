@@ -308,7 +308,7 @@ export interface Seal { day: number; hash: string; prev: string; events: number;
 /** A law with teeth: what the council's words were read to mean, and what the engine now does. */
 export type Rule = { kind: "tax"; percent: number; text: string } | { kind: "cap"; item: string; price: number; text: string } | { kind: "curfew"; hour: number; text: string };
 export interface TownSnapshot {
-  t: number; day: number; weather: string; flourShortage: boolean;
+  t: number; day: number; weather: string; flourShortage: boolean; fishery?: number;
   /** Places whose state can change: plots, sites, what people built, beds and owners. Positions come from the code. */
   places?: Place[];
   jobs?: { id: string; title: string; place: PlaceId; wage: number; hours: [number, number]; slots: number }[];

@@ -106,6 +106,7 @@ export class Town {
   paused = false; economyFrozen = false; boatHeld = false;
   /** Coins that entered the island (arrivals, the mainland paying for produce) and left it (departures), so the books can be checked. */
   minted = 0; burned = 0;
+  fishery = 0; fisheryMax = 0; private overfished = false; // the sea's fish: a renewable stock that overfishing can crash
   private nextId = 1;
   private idPrefix = "";
   private nextEventId = 1;
@@ -135,6 +136,9 @@ export class Town {
     this.creditBank = opts.creditBank; this.creditRefund = opts.creditRefund;
     this.t = (this.day - 1) * MINUTES_PER_DAY + 6 * 60; // towns start at 06:00
     this.weather = this.rollWeather();
+    const fishPerDay = this.pack.produce.filter((pr) => pr.makes === "fish").reduce((s, pr) => s + pr.qty, 0);
+    this.fisheryMax = fishPerDay > 0 ? Math.max(40, fishPerDay * 14) : 0; // the grounds hold ~two weeks of full fishing
+    this.fishery = this.fisheryMax;
   }
 
   // ---------- time ----------
@@ -209,7 +213,7 @@ export class Town {
 
   /** Bring the town back from its record. Replaces whatever population exists. */
   restore(snap: TownSnapshot): void {
-    this.t = snap.t; this.day = Math.floor(snap.t / MINUTES_PER_DAY) + 1; this.weather = snap.weather; this.flourShortage = snap.flourShortage; // the minute counter is the truth; the day follows it
+    this.t = snap.t; this.day = Math.floor(snap.t / MINUTES_PER_DAY) + 1; this.weather = snap.weather; this.flourShortage = snap.flourShortage; if (typeof snap.fishery === "number") this.fishery = snap.fishery; // the minute counter is the truth; the day follows it
     this.agents.clear();
     for (const j of this.jobs.values()) j.holders = [];
     // what people built, over the map the code lays out: the code owns positions and roads, the record owns everything else
@@ -252,7 +256,7 @@ export class Town {
 
   snapshot(): TownSnapshot {
     return {
-      t: this.t, day: this.day, weather: this.weather, flourShortage: this.flourShortage,
+      t: this.t, day: this.day, weather: this.weather, flourShortage: this.flourShortage, fishery: this.fishery,
       places: [...this.places.values()].map((p) => structuredClone(p)),
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
@@ -1003,7 +1007,7 @@ export class Town {
       else this.emit("boat.dock", [], "harbor", `The ${String(h).padStart(2, "0")}:00 boat docked.`, 0.03);
     }
     if (this.economyFrozen) return;
-    if (h === 6) { this.cart(); this.prosper(); }
+    if (h === 6) { this.cart(); this.prosper(); this.regenFishery(); }
     if (h === 7) this.merchants(); // the trade house works the gluts before the morning mainland boat
     if (h === 8) this.sellToMainland();
     if (h === 10) this.tourism(); // the day's visitors, once the island is awake and open
@@ -1420,8 +1424,21 @@ export class Town {
       if (pr.seasons && !pr.seasons.includes(this.season)) continue;
       if (pr.months && !pr.months.includes(this.month)) continue;
       if (pr.needs) { const have = place.stock[pr.needs.item] ?? 0; if (have < pr.needs.qty) { if (have === 0 && !this.dry.has(place.id)) { this.dry.add(place.id); this.emit("economy.price", [], place.id, `${place.name} has run out of ${pr.needs.item}; nothing was made today.`, 0.5); } continue; } place.stock[pr.needs.item] = have - pr.needs.qty; }
-      place.stock[pr.makes] = (place.stock[pr.makes] ?? 0) + Math.max(1, Math.round(pr.qty * weatherCut)); this.dry.delete(place.id);
+      let amount = Math.round(pr.qty * weatherCut);
+      if (pr.makes === "fish" && this.fisheryMax > 0) { amount = Math.max(0, Math.min(amount, Math.floor(this.fishery))); this.fishery -= amount; } // the catch is limited by what's left in the sea, and takes it
+      else amount = Math.max(1, amount);
+      if (amount > 0) { place.stock[pr.makes] = (place.stock[pr.makes] ?? 0) + amount; this.dry.delete(place.id); }
     }
+  }
+
+  /** The sea refills, but only so fast: logistic growth (fastest at half-stock) plus a small base so a crashed fishery can rebound. Overfishing — catching faster than this — thins the grounds until the nets come up light. Runs once a day. */
+  private regenFishery(): void {
+    if (this.fisheryMax <= 0) return;
+    const f = this.fishery, max = this.fisheryMax;
+    this.fishery = Math.min(max, f + Math.max(0, Math.round(max * 0.05 + 0.35 * f * (1 - f / max))));
+    const low = this.fishery < max * 0.2;
+    if (low && !this.overfished) { this.overfished = true; this.emit("economy.price", [], "fishhouse", "The fishing grounds are thinning — the nets come up light, and fish grow dear.", 0.5, { fishery: Math.round(this.fishery) }); }
+    else if (!low && this.overfished) { this.overfished = false; this.emit("economy.price", [], "fishhouse", "The fish are back: the grounds have recovered.", 0.4, { fishery: Math.round(this.fishery) }); }
   }
   private dry = new Set<string>();
   /** The six o'clock cart: goods move along the supply lines when the buyer can pay and the seller has them. */
