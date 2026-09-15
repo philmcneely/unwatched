@@ -107,6 +107,7 @@ export class Town {
   /** Coins that entered the island (arrivals, the mainland paying for produce) and left it (departures), so the books can be checked. */
   minted = 0; burned = 0;
   fishery = 0; fisheryMax = 0; private overfished = false; // the sea's fish: a renewable stock that overfishing can crash
+  private disasterRng!: Rng; // disasters draw from their own stream, so adding them doesn't perturb every seeded sim
   private nextId = 1;
   private idPrefix = "";
   private nextEventId = 1;
@@ -128,6 +129,7 @@ export class Town {
     this.ageOfMajority = opts.ageOfMajority ?? 20;
     this.harbors = opts.harbors ?? []; this.name = opts.name ?? "The island"; this.onDepart = opts.onDepart ?? null;
     this.rng = new Rng(opts.seed);
+    this.disasterRng = new Rng((opts.seed ?? 42) + 90210);
     this.brain = opts.brain;
     this.minutesPerTick = opts.minutesPerTick ?? 1;
     this.day = opts.startDay ?? 1;
@@ -1188,6 +1190,8 @@ export class Town {
     const w = this.weatherSource === "real" ? this.weather : this.rollWeather(); if (w !== this.weather) { this.weather = w; this.emit("weather.change", [], undefined, `The weather turned to ${w}.`, w === "storm" ? 0.5 : 0.1); }
     const mill = this.places.get("mill");
     if (this.weather === "storm" && mill && !(mill.brokenUntil && mill.brokenUntil > this.day) && this.rng.chance(0.5)) { mill.brokenUntil = this.day + 3; this.emit("economy.price", [], "mill", "The storm took the roof off the mill. It will be days before it turns again.", 0.6); }
+    // a tsunami: rare, and far likelier out of a storm; wrecks the coast and the farms
+    if (this.disasterRng.chance(this.weather === "storm" ? 0.03 : 0.0015)) this.flood();
     const bakery = this.places.get("bakery"); const short = !!bakery && (bakery.stock.flour ?? 0) <= 0 && (bakery.stock.bread ?? 0) <= 0;
     if (short && !this.flourShortage) { this.flourShortage = true; this.emit("economy.price", [], "bakery", "The bakery has no flour and no bread. What bread there is costs double.", 0.6); }
     else if (!short && this.flourShortage) { this.flourShortage = false; this.emit("economy.price", [], "bakery", "Flour is back at the bakery. Bread is a coin again.", 0.4); }
@@ -1882,6 +1886,28 @@ export class Town {
     this.emit("town.fire", g.actors, place.id, `Fire at ${place.name}: ${cause}. The bell rings; the town runs with buckets.`, 1, { stage: "alarm", cause });
     for (const a of this.agents.values()) { if (a.location === place.id) { a.heading = null; continue; } this.maybeWake(a, true); if (a.asleep) continue; const far = this.hops(a.location, place.id); if (far !== null && far <= 4) { a.heading = place.id; a.hint = `Fire at ${place.name}! Everyone is running with buckets. Go, or explain why not.`; } }
     for (const a of this.agents.values()) this.remember(a, `Fire at ${place.name}: ${cause}.`, 0.9, "rumor");
+  }
+
+  /**
+   * A tsunami: the sea comes over the low ground. The harbour, the fields and the shore are swept — those
+   * places are broken for days and their stores lost to the water. Rare, and likelier out of a storm. The
+   * wrecked farms mean hunger until food comes by boat, which is how a disaster on one island becomes trade
+   * (and, with a hub, aid) from its neighbours.
+   */
+  flood(): void {
+    const W = this.pack.size.w, H = this.pack.size.h, cx = W / 2, cy = H / 2;
+    const all = [...this.places.values()].filter((p) => p.kind !== "wild" && p.kind !== "plot");
+    const d = (p: Place) => Math.hypot(p.x - cx, p.y - cy);
+    const maxD = Math.max(1, ...all.map(d));
+    const coastal = new Set(["harbor", "fields", "orchard", "fishhouse", "fishquay", "boatshed", "saltpan", "kelpshore"]);
+    const hit = all.filter((p) => coastal.has(p.id) || d(p) > maxD * 0.72); // the harbour, the farms, and the outer shore
+    if (!hit.length) return;
+    const days = 4 + Math.floor(this.disasterRng.next() * 4); // 4..7 days to recover
+    let swept = 0;
+    for (const p of hit) { p.brokenUntil = this.day + days; for (const k of Object.keys(p.stock)) p.stock[k] = 0; if (p.treasury > 0) { swept += p.treasury; p.treasury = 0; } }
+    this.burned += swept; // the coins went into the sea
+    this.emit("town.notice", [], "harbor", `A tsunami struck ${this.name}: the sea came over the low ground, wrecking the harbour, the fields and the shore, and taking their stores. It will be ${days} days before the land is worked again — and lean until food comes by boat.`, 1, { disaster: "tsunami", places: hit.map((p) => p.id), days });
+    for (const a of this.agents.values()) this.remember(a, `A tsunami struck the island — the fields and the harbour are wrecked, and there will be little to eat until food comes across the water.`, 0.95, "rumor");
   }
   /** How many roads between two places. One walk of the roads per origin per minute; habit asks for every hungry person and every seller. */
   hops(from: string, to: string): number | null { if (from === to) return 0; return this.distances(from).get(to) ?? null; }
