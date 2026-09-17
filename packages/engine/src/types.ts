@@ -24,6 +24,8 @@ export interface Place {
   x: number; y: number; district: string; sprite: string;
   /** Who owns it. Rent and takings go to them; they sleep free; they pay the wages of anyone they employ. */
   owner: AgentId | null;
+  /** Set on a freshwater source: whether its owner is gating access, and what a drink costs when they do. Absent, or hoarded false, means anyone may drink free. */
+  water?: { hoarded: boolean; fee: number };
   /** Coins the business holds when nobody owns it. Wages come out of here; takings and the mainland's payment for produce go in. */
   treasury: number;
   /** What is on the shelves and in the store room. Nothing sells that is not here; shifts make more of it. */
@@ -103,7 +105,7 @@ export interface AgentState {
   lastSkillTrialDay?: number;
   id: AgentId;
   persona: Persona;
-  needs: { hunger: number; rest: number; social: number };
+  needs: { hunger: number; rest: number; social: number; thirst?: number };
   location: PlaceId;
   coins: number;
   inventory: string[];
@@ -150,8 +152,18 @@ export interface AgentState {
   heading: PlaceId | null;
   /** Days in a row that ended hungry, and days in a row that ended without a roof. Two hungry days makes you weak; five can kill. */
   starving: number; roofless: number;
+  /** Days in a row that ended dehydrated, for want of a drink. Two makes you weak, the same as hunger; it does not kill on its own. */
+  parched: number;
+  /** Coins on deposit at the bank, drawing modest interest each night. */
+  savings: number;
+  /** What is owed the bank: principal plus interest, capped like any debt at twice what was first borrowed. */
+  debt: number;
+  /** The debt as it stood when last borrowed against zero, so growth can be capped at twice it. */
+  debtPrincipal: number;
   /** Times the council found against them. The second time is the boat. */
   convictions: number;
+  /** How notorious they are, 0..1: rises on accusation and more on a guilty verdict, fades slowly with quiet days. Reputational, not judicial — colors how the town regards them without a new decision of its own. */
+  notoriety: number;
   /** Other people's secrets this person has learned, by whose id. */
   secretsKnown: Record<AgentId, string>;
   /** What they chose to keep an eye on: names of people, places, things. Their attention goes there. */
@@ -294,7 +306,7 @@ export interface AgentSnapshot {
   foodLessons?: import("./learning.ts").FoodLesson[];
   foodRoutineDecisions?: import("./learning.ts").FoodRoutineDecision[];
     deals?: Deal[];
-    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; convictions?: number; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
+    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; savings?: number; debt?: number; debtPrincipal?: number; convictions?: number; notoriety?: number; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
     /** kept so a restart does not ask the same question twice, or forget a letter it promised to answer */
     lastPlan?: ActivePlan | null; replyTo?: number | null; lastHungerThought?: number; starvingThoughtDay?: number; debtThoughtDay?: number; gatheringThoughtId?: number | null;
   };
