@@ -48,6 +48,10 @@ export interface AddAgentOptions {
   owner?: string | null;
   budget?: Partial<Budget>;
   coins?: number;
+  /** Innate sharpness, 0..1. Left unset, a fresh arrival gets a modest spread of their own, from the island's own dice. */
+  intelligence?: number;
+  /** Schooling already completed, 0..1. Left unset, everyone arrives essentially unschooled. */
+  education?: number;
 }
 
 const WEATHERS = ["clear", "clear", "clear", "rain", "rain", "wind", "fog", "storm"] as const; // "snow" only ever comes from the real sky
@@ -65,6 +69,16 @@ const BANK_LOAN_BASE_CAP = 30; // the least anyone can borrow on their name alon
 
 /** Relief a single drink gives a thirst, and what counts as dehydrated by night. */
 const WATER_DRINK_RELIEF = 0.6;
+
+/** Schooling: an innate spread of sharpness at arrival, and how slowly or quickly education is won at the school, or lost to never having one. */
+const EDU_INTELLIGENCE_MIN = 0.2, EDU_INTELLIGENCE_MAX = 0.9; // the spread a fresh adult arrives with; never touched again
+const EDU_STARTING = 0.05; // everyone starts all but unschooled
+const EDU_GAIN_BASE = 0.01, EDU_GAIN_SLOPE = 0.03; // an hour of school: base plus a slope on intelligence, so the sharper learn faster
+const EDU_SCHOOLED = 0.5; // the milestone a young citizen's coming-of-age notice marks
+/** What education and intelligence add to a shift's pay, as a fraction of the wage: the schooled and the sharp earn more for the same hours. */
+const EDU_WAGE_BONUS_MAX = 0.4;
+/** What it takes to start a business of one's own, and how often the town even looks: modest thresholds, checked once a night, so it is not spammy. */
+const ENTREPRENEUR_EDU_MIN = 0.55, ENTREPRENEUR_INT_MIN = 0.5, ENTREPRENEUR_CHANCE = 0.35;
 
 export class Town {
   /** Minimum interval for routine NPC thoughts only; paid entitlements and urgent decisions are unaffected. */
@@ -122,6 +136,7 @@ export class Town {
   minted = 0; burned = 0;
   fishery = 0; fisheryMax = 0; private overfished = false; // the sea's fish: a renewable stock that overfishing can crash
   private disasterRng!: Rng; // disasters draw from their own stream, so adding them doesn't perturb every seeded sim
+  private eduRng!: Rng; // schooling and entrepreneurship draw from their own stream too, for the same reason
   private nextId = 1;
   private idPrefix = "";
   private nextEventId = 1;
@@ -145,6 +160,7 @@ export class Town {
     this.isCapital = opts.isCapital ?? false; this.police = this.isCapital ? 1 : 0;
     this.rng = new Rng(opts.seed);
     this.disasterRng = new Rng((opts.seed ?? 42) + 90210);
+    this.eduRng = new Rng((opts.seed ?? 42) + 130717);
     this.brain = opts.brain;
     this.minutesPerTick = opts.minutesPerTick ?? 1;
     this.day = opts.startDay ?? 1;
@@ -213,6 +229,8 @@ export class Town {
       needs: { hunger: 0.3, rest: 0.2, social: 0.4, thirst: 0.3 },
       location: "harbor", coins: o.coins ?? 40, inventory: ["suitcase"], job: null,
       home: { place: "inn", nightsPaid: 3 }, asleep: false, arrivedAt: this.t,
+      intelligence: o.intelligence ?? clamp(EDU_INTELLIGENCE_MIN + this.eduRng.next() * (EDU_INTELLIGENCE_MAX - EDU_INTELLIGENCE_MIN)),
+      education: o.education ?? EDU_STARTING,
       skills: [], practice: null, relationships: new Map(), memory: [], foodAdvice: [], foodLessons: [], foodRoutineDecisions: [],
       budget: { tier1Max: 50, tier2Max: 5, tier1Left: 50, tier2Left: 5, ...o.budget },
       plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
@@ -245,6 +263,7 @@ export class Town {
     for (const sa of snap.agents) {
       const a: AgentState = {
         id: sa.id, persona: sa.persona,
+        intelligence: sa.state.intelligence ?? 0.5, education: sa.state.education ?? 0,
         needs: { ...sa.state.needs, thirst: sa.state.needs.thirst ?? 0.3 }, location: this.places.has(sa.state.location) ? sa.state.location : "harbor",
         coins: sa.state.coins, inventory: [...sa.state.inventory], job: sa.state.job && this.jobs.has(sa.state.job) ? sa.state.job : null,
         home: sa.state.home, asleep: sa.state.asleep, arrivedAt: sa.arrivedAt,
@@ -278,7 +297,7 @@ export class Town {
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
         id: a.id, persona: a.persona, owner: a.owner, funded: a.funded, appearance: a.appearance, arrivedAt: a.arrivedAt,
-        state: { desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
+        state: { intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
@@ -1041,6 +1060,7 @@ export class Town {
     this.summon(h); this.holdGatherings(h); this.sparks(h);
     if (this.weekday === 0) return; // Sunday: no shifts, no wages
     if (this.feastToday() && h >= 12) return; // a feast day: the afternoon is the town's
+    if (h === 13) this.schoolHour(); // the school keeps the morning; whoever is there and awake studies
     for (const job of this.jobs.values()) {
       if (h === job.hours[1]) for (const id of job.holders) {
         const a = this.agents.get(id); if (!a) continue;
@@ -1060,7 +1080,7 @@ export class Town {
           this.remember(a, `${place.name} let me go; they could not pay. I need other work.`, 0.9);
           if (!owner) a.hint = `${place.name} could not pay you and let you go. Find work somewhere that has money in the till, or make your own.`;
         }
-        else if (a.workedToday) { const tax = this.rules.find((r): r is Extract<Rule, { kind: "tax" }> => r.kind === "tax"); const cut = tax ? Math.floor((job.wage * tax.percent) / 100) : 0; a.coins += job.wage - cut; if (cut) { const council = this.places.get("council"); if (council) council.treasury += cut; } if (owner && owner.id !== id) owner.coins -= job.wage; else if (!owner) place.treasury -= job.wage; a.workedToday = false; this.emit("agent.work", [id], job.place, `${a.persona.name} was paid ${job.wage} for a shift as ${job.title}.`, 0.03); this.produce(place); }
+        else if (a.workedToday) { const tax = this.rules.find((r): r is Extract<Rule, { kind: "tax" }> => r.kind === "tax"); const cut = tax ? Math.floor((job.wage * tax.percent) / 100) : 0; const eduBonus = Math.round(job.wage * this.eduWageBonus(a)); a.coins += job.wage - cut + eduBonus; if (eduBonus) this.minted += eduBonus; if (cut) { const council = this.places.get("council"); if (council) council.treasury += cut; } if (owner && owner.id !== id) owner.coins -= job.wage; else if (!owner) place.treasury -= job.wage; a.workedToday = false; this.emit("agent.work", [id], job.place, `${a.persona.name} was paid ${job.wage} for a shift as ${job.title}.`, 0.03); this.produce(place); }
         else if (!(place.brokenUntil && place.brokenUntil > this.day) && this.rng.chance(0.5)) { job.holders = job.holders.filter((x) => x !== id); a.job = null; this.emit("agent.fired", [id], job.place, `${a.persona.name} did not turn up and lost the job as ${job.title}.`, 0.6); this.remember(a, `I lost the job as ${job.title} for not turning up.`, 0.8); } // a place that is not standing has no shift to miss
       }
     }
@@ -1205,6 +1225,8 @@ export class Town {
         }
       }
     }
+    // entrepreneurship: a schooled, sharp citizen with capital enough opens a shop of their own, at most one a night
+    this.tryEntrepreneurship();
     // a promise whose day has passed and which nobody settled is a promise broken, and the other side remembers it
     for (const a of this.agents.values()) for (const d of a.deals) {
       if (!d.mine || d.state !== "open" || d.due === null || this.t < d.due) continue;
@@ -1921,6 +1943,64 @@ export class Town {
   bankPlace(): Place {
     const named = [...this.places.values()].find((p) => p.id === "bank" || /\b(bank|counting house|exchange)\b/i.test(p.name));
     return named ?? this.places.get("market") ?? this.places.get("harbor") ?? [...this.places.values()][0]!;
+  }
+
+  // ---------- school ----------
+  /** Where schooling is done: a school or academy if the island built one, else the civic hall stands in, else the market. */
+  schoolPlace(): Place {
+    const named = [...this.places.values()].find((p) => p.id === "school" || p.id === "schoolhouse" || /\b(school|academy)\b/i.test(p.name));
+    if (named) return named;
+    const civic = [...this.places.values()].find((p) => p.kind === "civic");
+    return civic ?? this.places.get("market") ?? this.places.get("hall") ?? [...this.places.values()][0]!;
+  }
+  /** How sharp a citizen is, defaulting a legacy record with none on file to the middle of the range. */
+  private intel(a: AgentState): number { return a.intelligence ?? 0.5; }
+  /** How schooled a citizen is, defaulting a legacy record with none on file to unschooled. */
+  private edu(a: AgentState): number { return a.education ?? 0; }
+  /** An hour at the school: whoever is there and awake studies, faster the sharper they are, capped at fully schooled. A young citizen who crosses the schooled milestone is marked once, on the town's record. */
+  private schoolHour(): void {
+    const school = this.schoolPlace();
+    for (const a of this.agents.values()) {
+      if (a.asleep || a.location !== school.id) continue;
+      const before = this.edu(a);
+      if (before >= 1) continue;
+      const gain = EDU_GAIN_BASE + EDU_GAIN_SLOPE * this.intel(a);
+      a.education = clamp(before + gain);
+      if (before < EDU_SCHOOLED && a.education >= EDU_SCHOOLED) {
+        this.emit("town.notice", [a.id], school.id, `${a.persona.name} comes of age schooled, having studied at ${school.name}.`, 0.6, { education: Math.round(a.education * 100) / 100 });
+        this.remember(a, `I finished my schooling at ${school.name}. It will serve me.`, 0.7);
+      }
+    }
+  }
+  /** What education and intelligence add to a shift's wage, as a fraction of it: the schooled and the sharp earn more for the same hours. The extra is minted, the same way the mainland's own payment for produce is — nothing is taken from an owner or a till to pay it. */
+  private eduWageBonus(a: AgentState): number { return clamp(0.6 * this.edu(a) + 0.4 * this.intel(a)) * EDU_WAGE_BONUS_MAX; }
+  /** Once a night: an educated, sharp citizen with capital enough — savings, or a loan the bank will still carry — takes an empty plot and opens a shop of their own, the same way any shop gets built. At most one a night, so the island does not mint entrepreneurs by the dozen. */
+  private tryEntrepreneurship(): void {
+    const plot = [...this.places.values()].find((p) => p.kind === "plot" && !p.site && !p.community);
+    if (!plot) return;
+    const spec = BUILDS.shop;
+    for (const a of this.agents.values()) {
+      if (this.edu(a) < ENTREPRENEUR_EDU_MIN || this.intel(a) < ENTREPRENEUR_INT_MIN) continue;
+      if ([...this.places.values()].some((p) => p.owner === a.id && p.kind === "shop")) continue;
+      const fromSavings = (a.savings ?? 0) >= spec.coins;
+      if (!fromSavings && this.loanCap(a) < spec.coins) continue;
+      if (!this.eduRng.chance(ENTREPRENEUR_CHANCE)) continue;
+      if (fromSavings) { a.savings -= spec.coins; this.minted += spec.coins; }
+      else { this.borrowFromBank(a, spec.coins); a.coins -= spec.coins; }
+      const council = this.places.get("council"); const sawpit = this.places.get("sawpit");
+      const forPlanks = sawpit ? Math.min(spec.planks, spec.coins) : 0;
+      if (council) council.treasury += spec.coins - forPlanks;
+      if (sawpit) { sawpit.stock.planks = Math.max(0, (sawpit.stock.planks ?? 0) - spec.planks); const sawyer = sawpit.owner ? this.agents.get(sawpit.owner) : null; if (sawyer) sawyer.coins += forPlanks; else sawpit.treasury += forPlanks; }
+      plot.name = siteName("shop", a.persona.name, undefined);
+      plot.kind = "shop"; plot.owner = a.id; plot.sprite = "shop"; plot.site = null;
+      plot.sells = [{ item: "bread", base: 1 }, { item: "soup", base: 2 }, { item: "drink", base: 1 }];
+      stockShelf(this.pack, plot);
+      const jid = `${plot.id}.help`;
+      if (!this.jobs.has(jid)) this.jobs.set(jid, { id: jid, title: `help at ${plot.name}`, place: plot.id, wage: 2, hours: [9, 17], slots: 1, holders: [] });
+      this.emit("town.built", [a.id], plot.id, `${a.persona.name}, schooled and sharp, opened ${plot.name} on the ${plot.district}: a citizen's own enterprise, built on learning and capital.`, 0.85, { what: "shop", place: plot.id, entrepreneur: true });
+      this.remember(a, `I opened ${plot.name}. It is mine, built on what I learned and saved.`, 0.9);
+      return;
+    }
   }
   /** What this person could still be lent: a small sum on their name alone, more for savings put by and coin in hand, less whatever they already owe. Never negative. */
   loanCap(a: AgentState): number {

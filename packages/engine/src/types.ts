@@ -103,6 +103,10 @@ export interface AgentState {
   skills?: import("./skills.ts").LearnedSkill[];
   practice?: import("./skills.ts").SkillPractice | null;
   lastSkillTrialDay?: number;
+  /** How sharp they were born, 0..1. Innate, set once when they arrive or come of age; nothing after changes it. */
+  intelligence: number;
+  /** What schooling they have completed so far, 0..1. Starts near nothing; rises with time spent at the school, faster for the more intelligent. */
+  education: number;
   id: AgentId;
   persona: Persona;
   needs: { hunger: number; rest: number; social: number; thirst?: number };
@@ -302,6 +306,7 @@ export interface AgentSnapshot {
     skills?: import("./skills.ts").LearnedSkill[];
     practice?: import("./skills.ts").SkillPractice | null;
     lastSkillTrialDay?: number;
+    intelligence?: number; education?: number;
     needs: AgentState["needs"]; location: PlaceId; coins: number; inventory: string[]; job: string | null;
     home: AgentState["home"]; asleep: boolean; budget: Budget; intentions: string[]; rumors: string[];
     foodAdvice?: import("./learning.ts").FoodAdvice[];
