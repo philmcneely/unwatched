@@ -34,7 +34,7 @@ export const CAPITAL: WorldPack = {
     P("boatshed", "the boat shed", "home", "the harbor", "boatshed", 760, 1760, ["harbor"], { beds: { price: 0, capacity: 8 } }),
     P("chandlery", "the chandlery", "shop", "the harbor", "chandlery", 1050, 1440, ["harbor"], { sells: [{ item: "rope", base: 3 }, { item: "lamp oil", base: 2 }], beds: { price: 3, capacity: 1 }, stock: { rope: 8, "lamp oil": 6 } }),
     P("esplanade", "the esplanade", "public", "the harbor", "bench", 640, 1210, ["harbor", "forum", "lighthouse"]),
-    P("lighthouse", "the Aurelian light", "public", "the harbor", "lighthouse", 290, 1020, ["esplanade"]),
+    P("lighthouse", "the Aurelian light", "public", "the harbor", "lighthouse", 290, 1020, ["esplanade", "commons"]),
 
     // The Exchange — the grand market, the exchange house, the bank, the shops and the makers.
     P("market", "the grand market", "market", "the exchange", "stall", 1370, 1340, ["harbor", "inn", "bakery", "exchange", "bookshop", "draper", "bank", "tavern", "forum", "grandway"], { sells: [{ item: "bread", base: 1 }, { item: "fish", base: 1 }, { item: "apples", base: 1 }, { item: "cloth", base: 3 }], stock: { bread: 10, fish: 6, apples: 6, cloth: 4 } }),
@@ -60,7 +60,7 @@ export const CAPITAL: WorldPack = {
     P("monument", "the monument", "public", "the close", "well", 2790, 1210, ["gardens"]),
 
     // The Grand Way — the great street of the living city: the inn, the tavern, the bakery, the mill, the homes.
-    P("grandway", "the Grand Way", "public", "old town", "lamp", 1810, 1800, ["market", "weavery", "printhouse", "bakery", "mill", "row-1", "row-2", "row-3", "orchard", "fields"]),
+    P("grandway", "the Grand Way", "public", "old town", "lamp", 1810, 1800, ["market", "weavery", "printhouse", "bakery", "mill", "row-1", "row-2", "row-3", "orchard", "fields", "heath", "moor"]),
     P("inn", "the crown inn", "inn", "old town", "inn", 1000, 1170, ["market", "harbor"], { sells: [{ item: "soup", base: 2 }, { item: "bread", base: 1 }], beds: { price: 5, capacity: 8 }, stock: { soup: 8, bread: 6, fish: 4 } }),
     P("tavern", "the Old Crown", "public", "old town", "tavern", 1590, 1630, ["market"], { sells: [{ item: "drink", base: 1 }] }),
     P("bakery", "the grand bakery", "workplace", "old town", "bakery", 1520, 1840, ["grandway"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 14, flour: 10 } }),
@@ -78,6 +78,13 @@ export const CAPITAL: WorldPack = {
 
     // The trade house — a merchant ships Aurelia's gluts of books and cloth to the mainland.
     P("tradehouse", "the trade house", "shop", "the exchange", "chandlery", 950, 1570, ["harbor"], { sells: [{ item: "books", base: 4 }, { item: "cloth", base: 3 }], stock: { books: 3, cloth: 4 } }),
+
+    // Idle wild land, out past the last built street — the capital's own room to grow: a future farm to feed
+    // itself, or a park for the city to keep. No job stands on it and nothing in the pack is produced from it,
+    // so the town itself may one day sell it to whoever has saved enough to buy it.
+    P("heath", "the Aurelian heath", "wild", "the fields", "field", 3400, 1550, ["grandway"]),
+    P("moor", "the wild moor", "wild", "the fields", "field", 3150, 1950, ["grandway"]),
+    P("commons", "the north commons", "wild", "the harbor", "field", 150, 750, ["lighthouse"]),
   ],
   jobs: [
     { id: "bank.teller", title: "teller at the bank", place: "bank", wage: 3, hours: [9, 16], slots: 2 },
