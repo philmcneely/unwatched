@@ -16,6 +16,8 @@ Stdlib only (http.server + sqlite3), matching fleet convention. Env:
   HUB_LIVE_SEC seconds since last heartbeat to still count an island "live" (default 360)
 """
 import json, os, re, sqlite3, threading, time, html
+import urllib.request, urllib.error
+import concurrent.futures
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("HUB_PORT", "4600"))
@@ -157,6 +159,70 @@ def world_map():
             "mainland": {"mood": "neutral", "edicts": []}, "events": []}
 
 
+# ---- the regional gazette: each island runs its own paper (GET {url}/api/papers/latest,
+# see packages/protocol Paper shape: {edition,date,weather,lead:{headline,deck,body},briefs:[{headline,body}],...}).
+# The hub just aggregates the latest edition from every island it knows about, cached briefly
+# since papers only turn over about once a game-day and we don't want every page load fanning
+# out N http calls to the islands. ----
+GAZETTE_TTL = 120
+_gazette_cache = {"data": None, "at": 0}
+_gazette_lock = threading.Lock()
+
+
+def _fetch_paper(url, timeout=5):
+    try:
+        req = urllib.request.Request(
+            url.rstrip("/") + "/api/papers/latest",
+            headers={"Accept": "application/json", "User-Agent": "uw-hub-gazette/1"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            raw = resp.read()
+        data = json.loads(raw.decode("utf-8", "replace"))
+        if not isinstance(data, dict) or not data.get("lead"):
+            return None  # e.g. {"error":"the first edition prints at midnight"} — no paper yet
+        return data
+    except Exception:
+        return None  # unreachable / 404 / timeout / bad json — skip this island gracefully
+
+
+def build_gazette():
+    islands = [i for i in all_islands() if i.get("url")]
+    results = {}
+    if islands:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(islands))) as ex:
+            futs = {ex.submit(_fetch_paper, i["url"]): i["id"] for i in islands}
+            for fut in concurrent.futures.as_completed(futs, timeout=30):
+                iid = futs[fut]
+                try:
+                    results[iid] = fut.result()
+                except Exception:
+                    results[iid] = None
+    editions = []
+    for i in islands:
+        data = results.get(i["id"])
+        if not data:
+            continue
+        lead = data.get("lead") or {}
+        briefs = [b.get("headline", "") for b in (data.get("briefs") or [])
+                  if isinstance(b, dict) and b.get("headline")][:3]
+        editions.append({
+            "id": i["id"], "name": i.get("name") or i["id"],
+            "date": data.get("date"), "weather": data.get("weather"),
+            "headline": lead.get("headline"), "deck": lead.get("deck"),
+            "briefs": briefs,
+        })
+    return {"editions": editions, "asOf": now()}
+
+
+def get_gazette():
+    with _gazette_lock:
+        if _gazette_cache["data"] is None or (now() - _gazette_cache["at"]) >= GAZETTE_TTL:
+            _gazette_cache["data"] = build_gazette()
+            _gazette_cache["at"] = now()
+        return _gazette_cache["data"]
+
+
 # ---- the live overview / spectator switcher page ----
 PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1"><title>The Archipelago</title>
@@ -184,11 +250,49 @@ h1{font-size:20px;margin:0;font-weight:800}
 .hint{position:fixed;right:14px;bottom:12px;z-index:6;font-size:12px;background:rgba(247,246,243,.72);padding:6px 10px;border-radius:10px}
 .enter{position:fixed;inset:0;z-index:20;background:var(--sea);opacity:0;pointer-events:none;transition:opacity .4s}
 .err{position:fixed;inset:0;display:grid;place-items:center;color:var(--ember);font-weight:700}
+/* distress overlay: a clear ring + badge on any island whose row reports distress:true */
+.isle.distress::after{content:"";position:absolute;inset:-7%;border-radius:50%;border:3px solid var(--ember);
+  box-shadow:0 0 0 5px rgba(228,87,46,.22);pointer-events:none;animation:distressPulse 1.8s ease-in-out infinite}
+@keyframes distressPulse{0%,100%{opacity:.5}50%{opacity:1}}
+.isle .badge{position:absolute;top:-6px;right:2%;transform:translateY(-100%);background:var(--ember);color:#fff8f5;
+  font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;box-shadow:0 2px 7px rgba(20,45,40,.4);
+  white-space:nowrap;pointer-events:none;z-index:4;letter-spacing:.02em}
+/* relations overlay: pan/zooms with #board since it's an absolutely-positioned child of it */
+#relLayer{position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:1}
+/* gazette toggle + panel */
+.gazBtn{pointer-events:auto;cursor:pointer;background:rgba(247,246,243,.82);border:1px solid rgba(18,48,43,.22);
+  color:var(--ink);font:800 12px/1 ui-sans-serif,system-ui,sans-serif;padding:8px 14px;border-radius:999px;
+  letter-spacing:.03em;box-shadow:0 2px 8px rgba(20,45,40,.18)}
+.gazBtn:hover{background:#fff}
+#gazPanel{position:fixed;top:0;right:0;height:100%;width:min(400px,92vw);background:#f7f6f3;color:var(--ink);
+  box-shadow:-10px 0 34px rgba(20,45,40,.28);z-index:15;transform:translateX(105%);transition:transform .28s ease;
+  display:flex;flex-direction:column}
+#gazPanel.open{transform:translateX(0)}
+#gazPanel .gazHead{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(18,48,43,.15);
+  text-shadow:none}
+#gazPanel .gazHead .eyebrow{color:#0f3a34}
+#gazPanel .gazHead h2{margin:0 0 0 2px;font-size:17px;flex:1;font-weight:800}
+#gazPanel .gazClose{cursor:pointer;background:none;border:none;font-size:22px;color:var(--ink);line-height:1;padding:2px 4px}
+#gazPanel .gazBody{overflow-y:auto;padding:6px 18px 30px}
+.edition{margin:16px 0;padding-bottom:16px;border-bottom:1px dashed rgba(18,48,43,.22)}
+.edition:last-child{border-bottom:none}
+.edition .eName{font-size:11px;text-transform:uppercase;letter-spacing:.12em;font-weight:800;color:#0f3a34}
+.edition .eDate{font-size:11px;color:#5a726c;margin-left:6px}
+.edition .eHead{font-size:16px;font-weight:800;margin:5px 0 3px;line-height:1.25}
+.edition .eDeck{font-size:13px;color:#3a544e;margin:0 0 7px}
+.edition ul{margin:0;padding-left:18px;font-size:12.5px;color:#20403a}
+.edition ul li{margin:2px 0}
+.gazEmpty{color:#5a726c;font-size:13px;padding:26px 0;text-align:center}
 </style></head><body>
-<header><span class=eyebrow>Unwatched</span><h1>The Archipelago</h1><span class=count id=count></span></header>
+<header><span class=eyebrow>Unwatched</span><h1>The Archipelago</h1><span class=count id=count></span>
+<button id=gazBtn class=gazBtn type=button>📰 Gazette</button></header>
 <div id=board></div>
 <div class=hint>scroll / pinch to zoom · drag to pan · click an island to enter</div>
 <div class=enter id=enter></div>
+<div id=gazPanel>
+  <div class=gazHead><span class=eyebrow>The Regional</span><h2>Gazette</h2><button id=gazClose class=gazClose type=button aria-label=close>&times;</button></div>
+  <div id=gazBody class=gazBody><div class=gazEmpty>Loading the wires…</div></div>
+</div>
 <script>
 const POS={capital:[1000,600],island:[430,360],kestrel:[1560,360],cairnhold:[1640,900],vinehaven:[500,960]};
 const KIND={island:"the founding town",kestrel:"a fishing isle",cairnhold:"a mining hold",vinehaven:"a vineyard",capital:"the capital"};
@@ -201,14 +305,17 @@ async function build(){
   catch(e){ document.body.insertAdjacentHTML("beforeend","<div class=err>Could not reach the hub.</div>"); return; }
   const xs=d.islands||[]; board.innerHTML="";
   let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  const rects={}; // id -> tile center, in #board's own coordinate space (so overlays pan/zoom with it)
   xs.forEach((i,ix)=>{
     const sw=(i.size&&i.size.w)||DEFW, sh=(i.size&&i.size.h)||1800;
     const w=sw*SCALE, h=sh*SCALE; // same scale on both axes: correct aspect AND larger islands larger
     let c=POS[i.id]; if(!c){const a=-Math.PI/2+ix*2*Math.PI/Math.max(1,xs.length); c=[1000+640*Math.cos(a),620+440*Math.sin(a)];}
     const left=c[0]-w/2, top=c[1]-h/2;
     minx=Math.min(minx,left);miny=Math.min(miny,top);maxx=Math.max(maxx,left+w);maxy=Math.max(maxy,top+h);
-    const el=document.createElement("div"); el.className="isle"; el.style.cssText=`left:${left}px;top:${top}px;width:${w}px;height:${h}px`;
+    rects[i.id]={cx:left+w/2,cy:top+h/2,left,top,w,h};
+    const el=document.createElement("div"); el.className="isle"+(i.distress?" distress":""); el.style.cssText=`left:${left}px;top:${top}px;width:${w}px;height:${h}px`;
     el.innerHTML=`<img loading=lazy src="/snap/${encodeURIComponent(i.id)}.png?v=${Math.floor((i.lastSeen||0))}" alt="${esc(i.name)}" onerror="this.style.opacity=.25">`+
+      (i.distress?`<div class=badge>&#9888; needs food</div>`:``)+
       `<div class=lbl><div class=nm>${i.pack==="capital"?"★ ":""}${esc(i.name)}</div>`+
       `<div class=meta><span class="dot ${i.live?"":"q"}"></span>${i.population||0} souls · day ${i.day||0} · ${esc(i.weather||"?")} · ${esc(KIND[i.pack]||i.pack)}</div></div>`;
     el.addEventListener("click",()=>enter(i));
@@ -216,10 +323,50 @@ async function build(){
   });
   document.getElementById("count").textContent=xs.length+" islands · "+xs.filter(i=>i.live).length+" live";
   if(xs.length){const bw=maxx-minx,bh=maxy-miny,pad=90;const z=Math.min((innerWidth-pad*2)/bw,(innerHeight-pad*2)/bh,1.2);view.z=z;view.x=(innerWidth-bw*z)/2-minx*z;view.y=(innerHeight-bh*z)/2-miny*z+20;apply();}
+  if(xs.length) drawRelations(rects,Math.max(0,maxx),Math.max(0,maxy));
+}
+async function drawRelations(rects,boardW,boardH){
+  let m; try{ m=await (await fetch("/world/map",{cache:"no-store"})).json(); }
+  catch(e){ return; } // no relations layer if /world/map is unreachable — the tiles still work fine
+  const rels=(m.relations||[]).filter(r=>r.stance!=="neutral"||r.blockade||r.friction>0);
+  const ns="http://www.w3.org/2000/svg";
+  const svg=document.createElementNS(ns,"svg"); svg.id="relLayer";
+  svg.setAttribute("width",Math.ceil(boardW)); svg.setAttribute("height",Math.ceil(boardH));
+  rels.forEach(r=>{
+    const a=rects[r.from], b=rects[r.to]; if(!a||!b) return;
+    const color=(r.blockade||r.stance==="enemy")?"#c1401f":r.stance==="rival"?"#c98a1f":r.stance==="ally"?"#2f9e6d":"#7d8f88";
+    const line=document.createElementNS(ns,"line");
+    line.setAttribute("x1",a.cx); line.setAttribute("y1",a.cy); line.setAttribute("x2",b.cx); line.setAttribute("y2",b.cy);
+    line.setAttribute("stroke",color); line.setAttribute("stroke-width",r.blockade?4:2.5);
+    line.setAttribute("stroke-linecap","round"); line.setAttribute("opacity","0.85");
+    if(r.friction>0) line.setAttribute("stroke-dasharray","9 7");
+    svg.appendChild(line);
+  });
+  // sits under the isle tiles (inserted first) but still inside #board, so it pans/zooms with it
+  board.insertBefore(svg,board.firstChild);
 }
 function enter(i){ if(!i.url)return; const e=document.getElementById("enter"); e.style.opacity="1"; setTimeout(()=>location.href=i.url,400); }
+// ---- regional gazette panel ----
+const gazPanel=document.getElementById("gazPanel"), gazBody=document.getElementById("gazBody");
+function openGazette(){ gazPanel.classList.add("open"); loadGazette(); }
+function closeGazette(){ gazPanel.classList.remove("open"); }
+async function loadGazette(){
+  gazBody.innerHTML="<div class=gazEmpty>Loading the wires…</div>";
+  let d; try{ d=await (await fetch("/world/gazette",{cache:"no-store"})).json(); }
+  catch(e){ gazBody.innerHTML="<div class=gazEmpty>Could not reach the gazette.</div>"; return; }
+  const eds=d.editions||[];
+  if(!eds.length){ gazBody.innerHTML="<div class=gazEmpty>No editions on the wire yet.</div>"; return; }
+  gazBody.innerHTML=eds.map(e=>`<div class=edition>`+
+    `<div><span class=eName>${esc(e.name)}</span><span class=eDate>${esc(e.date||"")}${e.weather?" · "+esc(e.weather):""}</span></div>`+
+    (e.headline?`<div class=eHead>${esc(e.headline)}</div>`:``)+
+    (e.deck?`<div class=eDeck>${esc(e.deck)}</div>`:``)+
+    ((e.briefs&&e.briefs.length)?`<ul>${e.briefs.map(b=>`<li>${esc(b)}</li>`).join("")}</ul>`:``)+
+    `</div>`).join("");
+}
+document.getElementById("gazBtn").addEventListener("click",e=>{e.stopPropagation();openGazette();});
+document.getElementById("gazClose").addEventListener("click",e=>{e.stopPropagation();closeGazette();});
 let drag=null,moved=false;
-addEventListener("pointerdown",e=>{if(e.target.closest("header,.hint"))return;drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y};moved=false;});
+addEventListener("pointerdown",e=>{if(e.target.closest("header,.hint,#gazPanel"))return;drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y};moved=false;});
 addEventListener("pointermove",e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>5)moved=true;view.x=drag.vx+dx;view.y=drag.vy+dy;apply();});
 addEventListener("pointerup",()=>{setTimeout(()=>drag=null,0);});
 addEventListener("click",e=>{if(moved)e.stopPropagation();},true);
@@ -278,6 +425,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"islands": all_islands()})
         if p == "/world/map":
             return self._send(200, world_map())
+        if p == "/world/gazette":
+            return self._send(200, get_gazette())
         m = re.match(r"^/world/islands/([^/]+)$", p)
         if m:
             iid = m.group(1)
