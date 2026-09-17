@@ -162,7 +162,15 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       const w1 = 0.09 + rnd() * 0.11, f1 = 2 + Math.floor(rnd() * 3), p1 = rnd() * 6.283;
       const w2 = 0.05 + rnd() * 0.09, f2 = 4 + Math.floor(rnd() * 4), p2 = rnd() * 6.283;
       const w3 = 0.03 + rnd() * 0.07, f3 = 1 + Math.floor(rnd() * 2), p3 = rnd() * 6.283;
-      const wobble = (a: number) => 1 + w1 * Math.sin(a * f1 + p1) + w2 * Math.cos(a * f2 + p2) + w3 * Math.sin(a * f3 + p3);
+      // Elongation: Rx/Ry above already stretch the base ellipse to the pack's own w/h, so a wide or tall pack
+      // is already long and narrow rather than round. On top of that, a pack whose aspect is far from square gets
+      // one more, odd-order wobble term — it leans the shape's "weight" toward one side rather than perturbing it
+      // symmetrically, so a long island reads as a gently curved spit (a Cuba, not a stretched-but-round oval).
+      // Scaled purely from the pack's own W/H (never an id), so every island's silhouette follows its own true
+      // proportions and a near-square pack gets almost none of it.
+      const aspectSkew = Math.abs(Math.log(W / H));
+      const w4 = Math.min(0.18, aspectSkew * 0.14), p4 = rnd() * 6.283;
+      const wobble = (a: number) => 1 + w1 * Math.sin(a * f1 + p1) + w2 * Math.cos(a * f2 + p2) + w3 * Math.sin(a * f3 + p3) + w4 * Math.sin(a + p4);
       const inside = (x: number, y: number): number => { const a = Math.atan2((y - cy) / Ry, (x - cx) / Rx); return Math.hypot((x - cx) / (Rx * wobble(a)), (y - cy) / (Ry * wobble(a))); }; // 1 is the shore
       const outline = (t: number): [number, number][] => { const pts: [number, number][] = []; for (let k = 0; k < 240; k++) { const a = (k / 240) * Math.PI * 2; const r = wobble(a) * t; pts.push([cx + Rx * r * Math.cos(a), cy + Ry * r * Math.sin(a)]); } return pts; };
       const poly = (g: Graphics, pts: [number, number][]) => { g.moveTo(pts[0]![0], pts[0]![1]); for (const [x, y] of pts.slice(1)) g.lineTo(x, y); g.closePath(); return g; };
@@ -226,6 +234,32 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
               relief.moveTo(x - w / 2, y).quadraticCurveTo(x - w * 0.14, y - h * 0.55, x, y - h).quadraticCurveTo(x + w * 0.14, y - h * 0.55, x + w / 2, y).closePath().fill(rockDark); // dark rock base
               relief.moveTo(x - w * 0.04, y - h * 0.04).quadraticCurveTo(x + w * 0.08, y - h * 0.62, x + w * 0.07, y - h * 0.94).quadraticCurveTo(x + w * 0.24, y - h * 0.5, x + w * 0.4, y).closePath().fill({ color: rockLit, alpha: 0.6 }); // lit face, upper-right
               relief.moveTo(x - w * 0.09, y - h * 0.78).quadraticCurveTo(x, y - h * 1.03, x + w * 0.09, y - h * 0.78).quadraticCurveTo(x, y - h * 0.62, x - w * 0.09, y - h * 0.78).closePath().fill({ color: cap, alpha: 0.85 }); // pale cap
+            }
+          }
+        }
+      }
+      // Grasslands: a soft green tint scattered over the open land near an island's fields and orchards, so a
+      // working farm or grove reads as pasture and meadow rather than bare ground. Gated on the island actually
+      // having farmland (a "field" or "orchard" sprite among its places) rather than any particular island id, so
+      // it appears wherever a pack grows something and nowhere else. Drawn once, straight onto `world` (so it
+      // sits behind every building and every agent in the `scene` container added below), seeded off the same
+      // rnd() stream as the coastline and the hills, and kept off the shore with the same `inside()` guard the
+      // rest of the ground uses.
+      {
+        const P = [...places.values()];
+        const farmland = P.filter((p) => p.sprite === "field" || p.sprite === "orchard");
+        if (farmland.length) {
+          const meadow = new Graphics(); world.addChild(meadow);
+          for (const fp of farmland) {
+            const patches = 12 + Math.floor(rnd() * 10);
+            for (let i = 0; i < patches; i++) {
+              const ang = rnd() * Math.PI * 2, dist = 50 + rnd() * 270;
+              const x = fp.x + Math.cos(ang) * dist, y = fp.y + Math.sin(ang) * dist * 0.55; // a flattened spread to match the ground's shallow angle
+              if (inside(x, y) > 0.94) continue; // land only, well clear of the shore
+              const w = 36 + rnd() * 64, h = w * (0.3 + rnd() * 0.16);
+              const tone = rnd() < 0.5 ? C.grass : mix(C.grass, 0xd9e6a8, 0.35);
+              meadow.ellipse(x, y, w, h).fill({ color: tone, alpha: 0.09 + rnd() * 0.07 });
+              for (let k = 0; k < 3; k++) { const tx = x + (rnd() * 2 - 1) * w * 0.6, ty = y + (rnd() * 2 - 1) * h * 0.6; if (inside(tx, ty) > 0.94) continue; meadow.ellipse(tx, ty, 2.4 + rnd() * 2.4, 1.2 + rnd() * 1.2).fill({ color: mix(C.grass, 0x000000, 0.16), alpha: 0.22 }); }
             }
           }
         }
@@ -344,6 +378,73 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           if (ins > 0.9 || ins < 0.08) continue; // inland, off the shore
           if (near(x, y, 90)) continue; // not on top of a building
           decor.push({ sprite: pick(), x, y, flip: rnd() < 0.5 }); placed++;
+        }
+      }
+      // A lighthouse and the rocks it warns of: a headland on one side of the island, seeded like the coastline
+      // (same rnd stream) so every island puts them somewhere different but stable across reloads. A short jetty
+      // — a couple of piers standing in the water and a run of decking — crosses to the biggest rock. Drawn into
+      // `scene` with zIndex=y like everything else on the ground, so agents and buildings sort over it correctly,
+      // and never gated on `shot`, since it should read in the snapshot the way the coastline itself does.
+      {
+        // inside(x,y) is exactly 1 at the shore (0 at the island's centre, >1 out in the sea); a point built this
+        // way lands at precisely that t, so t<1 is guaranteed land and t>1 is guaranteed water — no scanning needed.
+        const pointAt = (a: number, t: number) => ({ x: cx + Rx * wobble(a) * t * Math.cos(a), y: cy + Ry * wobble(a) * t * Math.sin(a) });
+        const landmarkPlaces = [...places.values()];
+        let headland = rnd() * Math.PI * 2;
+        for (let tries = 0; tries < 24; tries++) {
+          const p = pointAt(headland, 0.9);
+          if (!landmarkPlaces.some((pl) => Math.hypot(pl.x - p.x, pl.y - p.y) < 150)) break;
+          headland = rnd() * Math.PI * 2;
+        }
+        const lhPos = pointAt(headland, 0.9); // on land, just back from the water
+        const rockAngle = headland + (rnd() - 0.5) * 0.5; // the same headland the light watches over
+        const rockCount = 3 + Math.floor(rnd() * 4); // 3-6
+        const rocks: { x: number; y: number; r: number }[] = [];
+        for (let i = 0; i < rockCount; i++) {
+          const a = rockAngle + (rnd() - 0.5) * 0.5, t = 1.1 + rnd() * 0.16 + i * 0.02; // clearly offshore, never land
+          const p = pointAt(a, t); rocks.push({ x: p.x, y: p.y, r: 10 + rnd() * 12 });
+        }
+        const bridgeTarget = rocks.reduce((a, b) => (b.r > a.r ? b : a)); // the biggest rock takes the jetty
+        const shoreEnd = pointAt(rockAngle, 0.97); // where the decking leaves dry land
+
+        // the rocks: small grey humps breaking the water, a darker waterline, a fringe of foam
+        const rockG = new Graphics(); rockG.zIndex = shoreEnd.y; scene.addChild(rockG);
+        for (const rk of rocks) {
+          rockG.ellipse(rk.x, rk.y, rk.r * 0.85, rk.r * 0.55).fill(0x9aa39c); // the waterline / darker base
+          rockG.moveTo(rk.x - rk.r, rk.y - rk.r * 0.1).quadraticCurveTo(rk.x - rk.r * 0.5, rk.y - rk.r * 1.05, rk.x, rk.y - rk.r * 0.95).quadraticCurveTo(rk.x + rk.r * 0.55, rk.y - rk.r * 1.1, rk.x + rk.r, rk.y - rk.r * 0.05).quadraticCurveTo(rk.x + rk.r * 0.3, rk.y + rk.r * 0.25, rk.x - rk.r * 0.35, rk.y + rk.r * 0.1).closePath().fill(0xb9beb6); // the rounded rock itself
+          rockG.moveTo(rk.x - rk.r * 0.45, rk.y - rk.r * 0.55).quadraticCurveTo(rk.x - rk.r * 0.05, rk.y - rk.r * 0.85, rk.x + rk.r * 0.3, rk.y - rk.r * 0.55).stroke({ width: 1.4, color: 0xd8dbd3, alpha: 0.8, cap: "round" }); // a pale highlight
+          rockG.ellipse(rk.x, rk.y + rk.r * 0.42, rk.r * 1.05, rk.r * 0.3).stroke({ width: 2, color: C.foam, alpha: 0.55, cap: "round" }); // a foam ring at the waterline
+        }
+
+        // the jetty: a couple of piers standing in the water, a short run of decking out to the rocks — a fishing
+        // bridge, not a span. Always drawn to the rock cluster (not an islet, which `shot` hides) so it never breaks the snapshot.
+        {
+          const dx = bridgeTarget.x - shoreEnd.x, dy = bridgeTarget.y - shoreEnd.y, len = Math.hypot(dx, dy) || 1;
+          const nx = -dy / len, ny = dx / len, halfW = 9;
+          const jetty = new Graphics(); jetty.zIndex = (shoreEnd.y + bridgeTarget.y) / 2 - 1; scene.addChild(jetty);
+          const pierCount = 2 + (len > 130 ? 1 : 0);
+          for (let i = 1; i <= pierCount; i++) { const t = i / (pierCount + 1); const px = shoreEnd.x + dx * t, py = shoreEnd.y + dy * t; jetty.ellipse(px, py + 3, 7, 3.4).fill({ color: C.kelp, alpha: 0.22 }); jetty.rect(px - 3, py - 2, 6, 10).fill(0x8a6a48); } // ripple, then the piling
+          jetty.moveTo(shoreEnd.x - nx * halfW, shoreEnd.y - ny * halfW).lineTo(bridgeTarget.x - nx * halfW, bridgeTarget.y - ny * halfW).lineTo(bridgeTarget.x + nx * halfW, bridgeTarget.y + ny * halfW).lineTo(shoreEnd.x + nx * halfW, shoreEnd.y + ny * halfW).closePath().fill(0xc4a06e).stroke({ width: 1.4, color: 0x8a6a48 }); // the deck
+          const planks = Math.max(1, Math.round(len / 16));
+          for (let i = 0; i <= planks; i++) { const t = i / planks; const px = shoreEnd.x + dx * t, py = shoreEnd.y + dy * t; jetty.moveTo(px - nx * halfW, py - ny * halfW).lineTo(px + nx * halfW, py + ny * halfW).stroke({ width: 1, color: 0x8a6a48, alpha: 0.5 }); } // plank lines
+        }
+
+        // the lighthouse: a tapered, banded tower with a lantern room, a glow, and a beam out over the rocks it warns of
+        {
+          const lg = new Container(); lg.position.set(lhPos.x, lhPos.y); lg.zIndex = lhPos.y; scene.addChild(lg);
+          const g = new Graphics(); const baseW = 34, topW = 18, h = 128;
+          g.moveTo(-baseW / 2, 4).lineTo(baseW / 2, 4).lineTo(topW / 2, -h).lineTo(-topW / 2, -h).closePath().fill(0xf2ede1).stroke({ width: 2, color: 0x536451 }); // the tapered, whitewashed tower
+          for (let i = 0; i < 5; i += 2) { const y0 = 4 - h * (i / 5), y1 = 4 - h * ((i + 1) / 5); const w0 = baseW + (topW - baseW) * (i / 5), w1 = baseW + (topW - baseW) * ((i + 1) / 5); g.moveTo(-w0 / 2, y0).lineTo(w0 / 2, y0).lineTo(w1 / 2, y1).lineTo(-w1 / 2, y1).closePath().fill(0xc94f3d); } // red bands, alternating with the white showing through
+          g.roundRect(-baseW / 2 - 6, -4, baseW + 12, 16, 3).fill(0xc9b58f).stroke({ width: 1.5, color: 0x536451 }); // the base plinth
+          g.rect(-topW / 2 - 4, -h - 22, topW + 8, 22).fill(0x536451).stroke({ width: 1.5, color: 0x2c3a30 }); // the lantern room
+          g.moveTo(-topW / 2 - 8, -h - 22).lineTo(0, -h - 40).lineTo(topW / 2 + 8, -h - 22).closePath().fill(0x8a6a48); // its little roof
+          g.circle(0, -h - 33, 6).fill({ color: 0xfff2c4, alpha: 0.95 }); // the lamp
+          lg.addChild(g);
+          const glow = new Graphics(); glow.circle(0, -h - 33, 30).fill({ color: 0xfff2c4, alpha: 0.18 }); glow.circle(0, -h - 33, 16).fill({ color: 0xfff2c4, alpha: 0.28 }); lg.addChild(glow);
+          const beamAng = Math.atan2(bridgeTarget.y - lhPos.y, bridgeTarget.x - lhPos.x), beamLen = 260, spread = 0.22;
+          const beam = new Graphics(); beam.moveTo(0, -h - 33).lineTo(Math.cos(beamAng - spread) * beamLen, -h - 33 + Math.sin(beamAng - spread) * beamLen).lineTo(Math.cos(beamAng + spread) * beamLen, -h - 33 + Math.sin(beamAng + spread) * beamLen).closePath().fill({ color: 0xfff2c4, alpha: 0.1 }); // the beam, aimed at the rocks
+          lg.addChild(beam);
+          shadowUnder(lhPos.x, lhPos.y, baseW + 16);
         }
       }
       let trees: Container[] = [];

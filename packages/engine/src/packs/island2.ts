@@ -2,16 +2,24 @@ import type { PlaceKind } from "../types.ts";
 import type { WorldPack, PlaceSpec } from "./island.ts";
 
 /**
- * Kestrel Isle — a second island pack, deliberately SMALL: a compact rock where
- * the whole isle is a short walk. It's rich in fish, smoked fish, kelp and salt
- * but poor in grain, flour and timber. That scarcity is the point — it's why the
- * boat between Kestrel and the island is worth running (each sells what the other
- * lacks). It keeps the load-bearing place ids the habit engine falls back on
- * (harbor, inn, market, bakery, fields, chapel, tavern) and reuses the island's
- * sprite names so the client can draw it, but everything else — layout, names,
- * economy — is its own. Besides the open market it has a few proper shops (kind
- * "shop") where citizens buy: the net loft for gear, the fishmonger, the dry
- * store.
+ * Kestrel Isle — a second island pack, deliberately SMALL and, uniquely among
+ * the five, deliberately LONG: not a compact rock but a slender, curving spit
+ * strung out east to west, closer in shape to a barrier reef than a round
+ * island. It's rich in fish, smoked fish, kelp and salt but poor in grain,
+ * flour and timber. That scarcity is the point — it's why the boat between
+ * Kestrel and the island is worth running (each sells what the other lacks).
+ * Its wide `size` (roughly 2.75:1) tells the client's coastline generator to
+ * stretch the isle's outline into that long, narrow, gently curved shape, and
+ * its places are strung along the length accordingly: the quay at the western
+ * tip, the town just inland of it, the salt flats and thin fields along the
+ * middle, and the cliffs, kelp shore and light out at the eastern tip — so a
+ * long walk (or a single coast road) runs the whole spine of the isle. It
+ * keeps the load-bearing place ids the habit engine falls back on (harbor,
+ * inn, market, bakery, fields, chapel, tavern) and reuses the island's sprite
+ * names so the client can draw it, but everything else — layout, names,
+ * economy — is its own. Besides the open market it has a few proper shops
+ * (kind "shop") where citizens buy: the net loft for gear, the fishmonger,
+ * the dry store.
  *
  * Run it as its own instance: UW_PACK=kestrel UW_TOWN_ID=kestrel
  * UW_TOWN_NAME="Kestrel Isle", with the two instances' UW_HARBORS pointed at
@@ -20,37 +28,37 @@ import type { WorldPack, PlaceSpec } from "./island.ts";
 const P = (id: string, name: string, kind: PlaceKind, district: string, sprite: string, x: number, y: number, exits: string[], extra: Partial<PlaceSpec> = {}): PlaceSpec => ({ id, name, kind, district, sprite, x, y, exits, ...extra });
 
 export const KESTREL: WorldPack = {
-  id: "kestrel", name: "Kestrel Isle", size: { w: 2400, h: 1600 },
+  id: "kestrel", name: "Kestrel Isle", size: { w: 3300, h: 1200 },
   places: [
-    // The quay — the working waterfront: the boat, the fish, the smoke, the gear.
-    P("harbor", "the quay", "harbor", "quay", "harbor-office", 480, 1120, ["inn", "market", "smokehouse", "fishhouse", "netloft", "cliffpath"]),
-    P("inn", "the Kestrel inn", "inn", "quay", "inn", 760, 980, ["market"], { sells: [{ item: "soup", base: 2 }, { item: "bread", base: 1 }], beds: { price: 4, capacity: 6 }, stock: { soup: 8, bread: 4, fish: 6 } }),
-    P("fishhouse", "the fish house", "workplace", "quay", "fishhouse", 260, 940, ["netloft"], { sells: [{ item: "fish", base: 1 }], stock: { fish: 16 } }),
-    P("netloft", "the net loft", "shop", "quay", "chandlery", 240, 1200, ["boatshed"], { sells: [{ item: "rope", base: 3 }, { item: "lamp oil", base: 2 }], beds: { price: 3, capacity: 1 }, stock: { rope: 8, "lamp oil": 6 } }),
-    P("smokehouse", "the smokehouse", "workplace", "quay", "smithy", 620, 1300, ["market"], { sells: [{ item: "smoked fish", base: 2 }], stock: { "smoked fish": 8, fish: 4 } }),
-    P("boatshed", "the boat shed", "home", "quay", "boatshed", 320, 1320, [], { beds: { price: 0, capacity: 8 } }),
+    // The quay — the working waterfront, at the western tip of the spit: the boat, the fish, the smoke, the gear.
+    P("harbor", "the quay", "harbor", "quay", "harbor-office", 450, 620, ["inn", "market", "smokehouse", "fishhouse", "netloft", "cliffpath"]),
+    P("inn", "the Kestrel inn", "inn", "quay", "inn", 700, 520, ["market"], { sells: [{ item: "soup", base: 2 }, { item: "bread", base: 1 }], beds: { price: 4, capacity: 6 }, stock: { soup: 8, bread: 4, fish: 6 } }),
+    P("fishhouse", "the fish house", "workplace", "quay", "fishhouse", 280, 480, ["netloft"], { sells: [{ item: "fish", base: 1 }], stock: { fish: 16 } }),
+    P("netloft", "the net loft", "shop", "quay", "chandlery", 260, 760, ["boatshed"], { sells: [{ item: "rope", base: 3 }, { item: "lamp oil", base: 2 }], beds: { price: 3, capacity: 1 }, stock: { rope: 8, "lamp oil": 6 } }),
+    P("smokehouse", "the smokehouse", "workplace", "quay", "smithy", 650, 820, ["market"], { sells: [{ item: "smoked fish", base: 2 }], stock: { "smoked fish": 8, fish: 4 } }),
+    P("boatshed", "the boat shed", "home", "quay", "boatshed", 380, 900, [], { beds: { price: 0, capacity: 8 } }),
     // the isle wants boats badly but has no wood of its own — the yard runs on imported timber
-    P("boatyard", "the boatyard", "workplace", "quay", "sawpit", 660, 1180, ["harbor"], { stock: { timber: 6 } }),
-    // The town — the market, the shops, the trades, and the homes round the green.
-    P("market", "the fish market", "market", "town", "stall", 1080, 1000, ["fishmonger", "drygoods", "bakery", "tavern", "chapel", "saltpan", "green", "tradehouse"], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }, { item: "bread", base: 1 }], stock: { fish: 10, "smoked fish": 6, bread: 6 } }),
+    P("boatyard", "the boatyard", "workplace", "quay", "sawpit", 700, 680, ["harbor"], { stock: { timber: 6 } }),
+    // The town — just inland of the quay: the market, the shops, the trades, and the homes round the green.
+    P("market", "the fish market", "market", "town", "stall", 1150, 560, ["fishmonger", "drygoods", "bakery", "tavern", "chapel", "saltpan", "green", "tradehouse"], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }, { item: "bread", base: 1 }], stock: { fish: 10, "smoked fish": 6, bread: 6 } }),
     // the trade house: a merchant ships the isle's gluts of fish and salt to the mainland for the spread
-    P("tradehouse", "the trade house", "shop", "town", "chandlery", 1240, 880, ["market"], { sells: [{ item: "rope", base: 3 }, { item: "salt", base: 2 }], stock: { rope: 4, salt: 6 } }),
-    P("fishmonger", "the fishmonger", "shop", "town", "fishhouse", 900, 1140, [], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }], stock: { fish: 8, "smoked fish": 6 } }),
-    P("drygoods", "the dry store", "shop", "town", "stall", 1240, 1180, [], { sells: [{ item: "bread", base: 1 }, { item: "salt", base: 2 }], stock: { bread: 8, salt: 8 } }),
-    P("bakery", "the isle bakery", "workplace", "town", "bakery", 1040, 740, ["chapel"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 12, flour: 8 } }),
-    P("tavern", "the Anchor", "public", "town", "tavern", 1360, 1120, ["green"], { sells: [{ item: "drink", base: 1 }] }),
-    P("chapel", "the sea chapel", "public", "town", "chapel", 1440, 800, []),
-    P("green", "the green", "public", "town", "well", 1260, 1360, ["green-1", "green-2"]),
-    P("green-1", "a plot on the green", "plot", "town", "plot", 1140, 1500, []),
-    P("green-2", "the far plot on the green", "plot", "town", "plot", 1440, 1480, []),
-    // The high ground — the salt pans and the isle's thin grain.
-    P("saltpan", "the salt pans", "workplace", "flats", "field", 1720, 900, ["fields", "kelpshore"], { sells: [{ item: "salt", base: 2 }], stock: { salt: 12 } }),
-    P("fields", "the thin fields", "workplace", "flats", "field", 1820, 640, [], { stock: { grain: 24 } }),
-    // The cliffs and the shore — the kelp, the light, and a plot on the point.
-    P("cliffpath", "the cliff path", "public", "cliffs", "searocks", 460, 640, ["kelpshore", "lighthouse"]),
-    P("kelpshore", "the kelp shore", "workplace", "cliffs", "bench", 900, 380, [], { sells: [{ item: "kelp", base: 1 }], stock: { kelp: 20 } }),
-    P("lighthouse", "the Kestrel light", "public", "cliffs", "lighthouse", 300, 300, ["point-1"]),
-    P("point-1", "the plot on the point", "plot", "cliffs", "plot", 620, 240, []),
+    P("tradehouse", "the trade house", "shop", "town", "chandlery", 1350, 460, ["market"], { sells: [{ item: "rope", base: 3 }, { item: "salt", base: 2 }], stock: { rope: 4, salt: 6 } }),
+    P("fishmonger", "the fishmonger", "shop", "town", "fishhouse", 980, 720, [], { sells: [{ item: "fish", base: 1 }, { item: "smoked fish", base: 2 }], stock: { fish: 8, "smoked fish": 6 } }),
+    P("drygoods", "the dry store", "shop", "town", "stall", 1380, 720, [], { sells: [{ item: "bread", base: 1 }, { item: "salt", base: 2 }], stock: { bread: 8, salt: 8 } }),
+    P("bakery", "the isle bakery", "workplace", "town", "bakery", 1080, 320, ["chapel"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 12, flour: 8 } }),
+    P("tavern", "the Anchor", "public", "town", "tavern", 1420, 680, ["green"], { sells: [{ item: "drink", base: 1 }] }),
+    P("chapel", "the sea chapel", "public", "town", "chapel", 1550, 320, []),
+    P("green", "the green", "public", "town", "well", 1500, 880, ["green-1", "green-2"]),
+    P("green-1", "a plot on the green", "plot", "town", "plot", 1350, 1020, []),
+    P("green-2", "the far plot on the green", "plot", "town", "plot", 1650, 1000, []),
+    // The middle flats — the salt pans and the isle's thin grain, strung along the spine between town and cliffs.
+    P("saltpan", "the salt pans", "workplace", "flats", "field", 1950, 480, ["fields", "kelpshore"], { sells: [{ item: "salt", base: 2 }], stock: { salt: 12 } }),
+    P("fields", "the thin fields", "workplace", "flats", "field", 2150, 260, [], { stock: { grain: 24 } }),
+    // The cliffs and the shore, at the eastern tip — the kelp, the light, and a plot on the point.
+    P("cliffpath", "the cliff path", "public", "cliffs", "searocks", 2500, 560, ["kelpshore", "lighthouse"]),
+    P("kelpshore", "the kelp shore", "workplace", "cliffs", "bench", 2750, 320, [], { sells: [{ item: "kelp", base: 1 }], stock: { kelp: 20 } }),
+    P("lighthouse", "the Kestrel light", "public", "cliffs", "lighthouse", 3020, 680, ["point-1"]),
+    P("point-1", "the plot on the point", "plot", "cliffs", "plot", 2900, 860, []),
   ],
   jobs: [
     { id: "fishhouse.gutter", title: "fish gutter", place: "fishhouse", wage: 2, hours: [5, 11], slots: 3 },
