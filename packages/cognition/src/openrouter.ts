@@ -10,9 +10,13 @@ export interface OpenRouterBrainOptions {
   /** Production must not deliver mock output as a paid model response. */
   allowFallback?: boolean;
   apiKey?: string;
+  /** The chat-completions endpoint. Defaults to OpenRouter; set env UW_OR_BASE_URL (or this) to any OpenAI-compatible server — e.g. the fleet's local llm-proxy — to run the town on local models instead of a paid API. */
+  baseURL?: string;
   routine?: string;
   stakes?: string;
   reflect?: string;
+  /** A model for the day-plan call only (env UW_OR_MODEL_DAYPLAN). The dawn plan lands for every citizen at once — a burst that a single local engine serializes — so it can be sent to a cloud model that parallelizes it, while the constant decide/dialogue chatter stays local. */
+  dayPlanModel?: string;
   log?: (line: string) => void;
   /** Milliseconds before a routine or stakes call is given up on (env UW_OR_TIMEOUT_MS, default 45s) and a reflect-tier one (env UW_OR_TIMEOUT_REFLECT_MS, default 90s). */
   timeoutMs?: number;
@@ -93,9 +97,14 @@ export class OpenRouterBrain implements Brain {
   onUsage: ((usage: ProviderUsage) => void) | null = null;
   private spent = { calls: 0, prompt: 0, completion: 0 };
   private timeoutMs: number; private reflectTimeoutMs: number;
+  private endpoint: string;
 
   constructor(o: OpenRouterBrainOptions = {}) {
-    const key = o.apiKey ?? process.env.OPENROUTER_API_KEY;
+    // A local OpenAI-compatible endpoint (the fleet proxy) usually needs no real key; require one only when talking to OpenRouter itself.
+    const base = o.baseURL ?? process.env.UW_OR_BASE_URL;
+    this.endpoint = (base ?? "https://openrouter.ai/api/v1").replace(/\/+$/, "") + (base && !/\/chat\/completions$/.test(base) ? "/chat/completions" : base ? "" : "/chat/completions");
+    const local = !!base && !/openrouter\.ai/.test(base);
+    const key = o.apiKey ?? process.env.OPENROUTER_API_KEY ?? (local ? "local" : undefined);
     if (!key) throw new Error("OPENROUTER_API_KEY is not set");
     this.key = key; this.allowFallback = o.allowFallback ?? true;
     this.models = {
@@ -103,6 +112,7 @@ export class OpenRouterBrain implements Brain {
       stakes: o.stakes ?? process.env.UW_OR_MODEL_STAKES ?? "anthropic/claude-sonnet-5",
       reflect: o.reflect ?? process.env.UW_OR_MODEL_REFLECT ?? "anthropic/claude-opus-5",
     };
+    this.planModel = o.dayPlanModel ?? process.env.UW_OR_MODEL_DAYPLAN ?? null;
     this.timeoutMs = o.timeoutMs ?? envMs("UW_OR_TIMEOUT_MS", 45_000);
     this.reflectTimeoutMs = o.reflectTimeoutMs ?? envMs("UW_OR_TIMEOUT_REFLECT_MS", 90_000);
     this.log = o.log ?? (() => {});
@@ -120,11 +130,14 @@ export class OpenRouterBrain implements Brain {
   primer = "";
   /** Reading summaries need not inherit a Patron's careful-decision upgrade. */
   digestModel: string | null = null;
+  /** The day-plan model, when the dawn planning burst is sent somewhere of its own (see dayPlanModel). */
+  planModel: string | null = null;
   /** Which model a call goes to, for a citizen or for the town. A hook that throws is a hook that said nothing. */
   private pick(kind: CallKind, a: AgentState | null, slot?: Slot) {
     let o: Partial<Models> | null = null;
     try { o = this.modelsFor?.(a ?? TOWN) ?? null; } catch (err) { this.log(`warn: modelsFor threw for ${kind}: ${(err as Error).message}`); }
     if(kind === "digest" && this.digestModel)return {model:this.digestModel,slot:"stakes" as const};
+    if(kind === "day_plan" && this.planModel)return {model:this.planModel,slot:"routine" as const};
     return chooseModel(kind, this.models, o, slot);
   }
   /**
@@ -142,7 +155,7 @@ export class OpenRouterBrain implements Brain {
       if (Date.now() < this.blockedUntil) throw new Error("Provider unavailable; retry after cooldown");
       // the whole attempt is inside the try: the deadline aborts the body as well as the headers, so an answer that arrives half-read must fall back like any other
       try {
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        const res = await fetch(this.endpoint, {
           method: "POST",
           headers: { Authorization: `Bearer ${this.key}`, "Content-Type": "application/json", "HTTP-Referer": "https://unwatched.town", "X-Title": "Unwatched" },
           body: JSON.stringify(body),

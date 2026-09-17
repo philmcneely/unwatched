@@ -47,7 +47,11 @@ const BRAIN = process.env.UW_BRAIN ?? "mock";
 const CITIZENS_ENV = process.env.UW_CITIZENS ? Number(process.env.UW_CITIZENS) : null; // explicit override; otherwise scaled to island size below
 const log = (l: string) => console.log(`[town] ${l}`);
 
-const townBrain: Brain = BRAIN === "openrouter" ? new OpenRouterBrain({ log, allowFallback: false }) : BRAIN === "anthropic" ? new AnthropicBrain({ log }) : new MockBrain(SEED);
+// "local" runs the whole town on an OpenAI-compatible local endpoint (the fleet's Ollama/llm-proxy): free, self-hosted, no paid API. It reuses OpenRouterBrain (same chat-completions shape) with a local base URL, and — unlike the paid world — allows the mock to stand in if a local box hiccups, so the sim never stalls.
+const LOCAL_BASE = process.env.UW_OR_BASE_URL ?? "http://192.168.0.225:11434/v1";
+const townBrain: Brain = BRAIN === "openrouter" ? new OpenRouterBrain({ log, allowFallback: false })
+  : BRAIN === "local" ? new OpenRouterBrain({ log, allowFallback: true, baseURL: LOCAL_BASE, routine: process.env.UW_OR_MODEL_ROUTINE ?? "qwen2.5:7b-instruct", stakes: process.env.UW_OR_MODEL_STAKES ?? "qwen2.5:7b-instruct", reflect: process.env.UW_OR_MODEL_REFLECT ?? "qwen2.5:7b-instruct" })
+  : BRAIN === "anthropic" ? new AnthropicBrain({ log }) : new MockBrain(SEED);
 if (BRAIN === "openrouter" && process.env.OPENROUTER_SUBSCRIBER_API_KEY && process.env.OPENROUTER_SUBSCRIBER_API_KEY === process.env.OPENROUTER_API_KEY) throw new Error("Subscriber and public-world keys must be different");
 const subscriberBrain = BRAIN === "openrouter" && process.env.OPENROUTER_SUBSCRIBER_API_KEY
   ? new OpenRouterBrain({ apiKey: process.env.OPENROUTER_SUBSCRIBER_API_KEY, log, allowFallback: false }) : null;
@@ -56,7 +60,10 @@ const router = new BrainRouter(townBrain, log, (a) => {
   if (!subscriberBrain) throw new Error("Subscriber AI key is not configured; entitlement preserved");
   return subscriberBrain;
 });
-const MODELS = { routine: process.env.UW_OR_MODEL_ROUTINE ?? "anthropic/claude-haiku-4.5", stakes: process.env.UW_OR_MODEL_STAKES ?? "anthropic/claude-sonnet-5", reflect: process.env.UW_OR_MODEL_REFLECT ?? "anthropic/claude-opus-5" };
+// Local runs default to fleet-served qwen3 sizes (fast for the many routine calls, a larger mind for rare reflection); paid runs default to the Claude ladder. All three slots stay env-overridable.
+const LOCAL_MODELS = { routine: "qwen2.5:7b-instruct", stakes: "qwen2.5:7b-instruct", reflect: "qwen2.5:7b-instruct" };
+const modelDefault = (slot: "routine" | "stakes" | "reflect", paid: string) => BRAIN === "local" ? LOCAL_MODELS[slot] : paid;
+const MODELS = { routine: process.env.UW_OR_MODEL_ROUTINE ?? modelDefault("routine", "anthropic/claude-haiku-4.5"), stakes: process.env.UW_OR_MODEL_STAKES ?? modelDefault("stakes", "anthropic/claude-sonnet-5"), reflect: process.env.UW_OR_MODEL_REFLECT ?? modelDefault("reflect", "anthropic/claude-opus-5") };
 let clockRef = () => ({ day: 1, hour: 6, t: 0 });
 const PATRON_MODELS = { stakes: process.env.UW_OR_MODEL_PATRON_STAKES ?? "anthropic/claude-opus-5", reflect: process.env.UW_OR_MODEL_REFLECT ?? "anthropic/claude-opus-5" }; // a Patron's careful thoughts go to the most capable mind
 let modelsFor: (a: AgentState) => Partial<{ routine: string; stakes: string; reflect: string }> | null = () => null;
