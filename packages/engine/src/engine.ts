@@ -52,6 +52,8 @@ export interface AddAgentOptions {
   intelligence?: number;
   /** Schooling already completed, 0..1. Left unset, everyone arrives essentially unschooled. */
   education?: number;
+  /** Marks a wealth-shock arrival: someone who lands with a fortune (paired with a large `coins`) and, rather than hoarding it, puts it to work through the island's own bank, business and hiring — a magnate dropped onto the island. */
+  magnate?: boolean;
 }
 
 const WEATHERS = ["clear", "clear", "clear", "rain", "rain", "wind", "fog", "storm"] as const; // "snow" only ever comes from the real sky
@@ -93,6 +95,19 @@ const WILD_LAND_CHANCE = 0.35; // checked once a night, like entrepreneurship, s
 const LAND_DEVELOP_CHANCE = 0.5; // once bought, how often a night's thought turns idle land into something
 const LAND_FARM_EDU_MIN = 0.5; // an owner schooled at least this well puts bought land to the plough; anyone else leaves it standing as a park
 const FARM_YIELD_BASE = 1, FARM_YIELD_EDU_BONUS = 3; // a farm's nightly yield of food: modest alone, better for an educated, sharp owner
+
+/**
+ * Wealth shock: a magnate dropped onto the island with a fortune already made elsewhere. The interesting part is not the
+ * pile of coins itself but what it does once it lands — the same restraint as any other nightly mechanic (modest, capped,
+ * at most one step a night), and built entirely out of the bank, entrepreneurship and wage layers already here: a magnate
+ * either banks a slice of their surplus (which the bank can then lend against, on top of anyone's own standing) or, once
+ * banked enough is no longer needed, bankrolls a shop of their own outright and pays its help better than the going rate.
+ */
+const MAGNATE_RESERVE = 300; // what a magnate always keeps in hand, living expenses and a cushion against a bad week
+const MAGNATE_DEPLOY_FRACTION = 0.25; // how much of what's spare above the reserve goes to the bank each night — gradual, not a single dump
+const MAGNATE_POOL_CAP = 3000; // the most the bank's lending capacity can grow from a magnate's backing, however rich they are
+const MAGNATE_LOAN_BOOST_RATE = 0.1; // a tenth of the bank's magnate-backed reserve becomes extra headroom on everyone's loan cap
+const MAGNATE_WAGE_BONUS = 3; // a magnate-backed shop pays this much more a shift than the going rate for the same post
 
 export class Town {
   /** Minimum interval for routine NPC thoughts only; paid entitlements and urgent decisions are unaffected. */
@@ -159,6 +174,8 @@ export class Town {
   private nextDealId = 1;
   private arrivalsToday = 0;
   private departuresToday = 0;
+  /** How much capital a magnate (or several) has put to work at the bank, capped: extra headroom `loanCap` grants every borrower on the island, on top of their own standing. Zero on any island with no magnate, so nothing here changes for the town as it already was. */
+  private magnateBankPool = 0;
   private readonly minutesPerTick: number;
   private readonly onEvent: EventSink | undefined;
   private readonly log: (line: string) => void;
@@ -249,7 +266,7 @@ export class Town {
       education: o.education ?? EDU_STARTING,
       skills: [], practice: null, relationships: new Map(), memory: [], foodAdvice: [], foodLessons: [], foodRoutineDecisions: [],
       budget: { tier1Max: 50, tier2Max: 5, tier1Left: 50, tier2Left: 5, ...o.budget },
-      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
+      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, magnate: o.magnate ?? false, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
       funded: o.funded ?? true, owner: o.owner ?? null, letters: [], intentions: [],
       lastConversation: -999, lastThought: -999, heard: [], workedToday: false, rumors: [], appearance: null, instructions: "", brainKind: "hosted", thinkEvery: null,
       seenToday: [], trustDawn: {}, trustLog: [], lastHungerThought: -999, starvingThoughtDay: 0, debtThoughtDay: 0, gatheringThoughtId: null, replyTo: null,
@@ -258,6 +275,7 @@ export class Town {
     this.agents.set(id, a);
     this.remember(a, `Stepped off the boat with a suitcase and ${a.coins} coins. Three nights paid at the harbor inn.`, 0.7);
     this.emit("agent.arrive", [id], "harbor", `${a.persona.name} arrived on the boat.`, 0.5);
+    if (a.magnate) this.emit("town.notice", [id], "harbor", `${a.persona.name} stepped off the boat with a fortune of ${a.coins} coins. The island will feel this.`, 0.7, { magnate: true, coins: a.coins });
     this.arrivalsToday++; this.minted += a.coins;
     return a;
   }
@@ -288,7 +306,7 @@ export class Town {
         skills: structuredClone(sa.state.skills ?? []), practice: structuredClone(sa.state.practice ?? null), lastSkillTrialDay: sa.state.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(sa.state.foodAdvice ?? []), foodLessons: structuredClone(sa.state.foodLessons ?? []), foodRoutineDecisions: structuredClone(sa.state.foodRoutineDecisions ?? []),
         memory: [...sa.memory].sort((x, y) => x.t - y.t),
         budget: { ...sa.state.budget }, funded: sa.funded, owner: sa.owner, letters: sa.state.letters ?? [], intentions: [...sa.state.intentions],
-        deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
+        deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, magnate: sa.state.magnate ?? false, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
         seenToday: [], trustDawn: Object.fromEntries(sa.relationships.map((r) => [r.other, r.trust])), trustLog: [...(sa.state.trustLog ?? [])], lastHungerThought: sa.state.lastHungerThought ?? -999, starvingThoughtDay: sa.state.starvingThoughtDay ?? 0, debtThoughtDay: sa.state.debtThoughtDay ?? 0, gatheringThoughtId: sa.state.gatheringThoughtId ?? null, replyTo: sa.state.replyTo ?? null,
       };
       this.agents.set(a.id, a);
@@ -313,7 +331,7 @@ export class Town {
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
         id: a.id, persona: a.persona, owner: a.owner, funded: a.funded, appearance: a.appearance, arrivedAt: a.arrivedAt,
-        state: { intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
+        state: { intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
@@ -1241,6 +1259,9 @@ export class Town {
         }
       }
     }
+    // a wealth shock: a magnate puts surplus capital to work at the bank (raising what everyone can borrow against) or bankrolls a shop outright, at most one step a night
+    this.tryMagnateDeploy();
+    this.tryMagnateInvest();
     // entrepreneurship: a schooled, sharp citizen with capital enough opens a shop of their own, at most one a night
     this.tryEntrepreneurship();
     // wild land: bought at most one a night, then put to the plough or left standing as a park; a farm already standing yields food every night
@@ -1994,6 +2015,22 @@ export class Town {
   }
   /** What education and intelligence add to a shift's wage, as a fraction of it: the schooled and the sharp earn more for the same hours. The extra is minted, the same way the mainland's own payment for produce is — nothing is taken from an owner or a till to pay it. */
   private eduWageBonus(a: AgentState): number { return clamp(0.6 * this.edu(a) + 0.4 * this.intel(a)) * EDU_WAGE_BONUS_MAX; }
+  /** What a build's cost becomes once it is spent: planks taken from the sawpit (paying whoever runs it, or its own till), the rest to the council. Shared by anyone who pays for a shop or a house going up — a citizen on their own standing, or a magnate paying outright. */
+  private distributeBuildCost(spec: { coins: number; planks: number }): void {
+    const council = this.places.get("council"); const sawpit = this.places.get("sawpit");
+    const forPlanks = sawpit ? Math.min(spec.planks, spec.coins) : 0;
+    if (council) council.treasury += spec.coins - forPlanks;
+    if (sawpit) { sawpit.stock.planks = Math.max(0, (sawpit.stock.planks ?? 0) - spec.planks); const sawyer = sawpit.owner ? this.agents.get(sawpit.owner) : null; if (sawyer) sawyer.coins += forPlanks; else sawpit.treasury += forPlanks; }
+  }
+  /** A plot becomes a shop under this owner, stocked and ready, with one helper's post open at the given wage. The one piece of "opening a shop" every founder shares, whatever paid for it. */
+  private openShop(a: AgentState, plot: Place, wage = 2): void {
+    plot.name = siteName("shop", a.persona.name, undefined);
+    plot.kind = "shop"; plot.owner = a.id; plot.sprite = "shop"; plot.site = null;
+    plot.sells = [{ item: "bread", base: 1 }, { item: "soup", base: 2 }, { item: "drink", base: 1 }];
+    stockShelf(this.pack, plot);
+    const jid = `${plot.id}.help`;
+    if (!this.jobs.has(jid)) this.jobs.set(jid, { id: jid, title: `help at ${plot.name}`, place: plot.id, wage, hours: [9, 17], slots: 1, holders: [] });
+  }
   /** Once a night: an educated, sharp citizen with capital enough — savings, or a loan the bank will still carry — takes an empty plot and opens a shop of their own, the same way any shop gets built. At most one a night, so the island does not mint entrepreneurs by the dozen. */
   private tryEntrepreneurship(): void {
     const plot = [...this.places.values()].find((p) => p.kind === "plot" && !p.site && !p.community);
@@ -2005,20 +2042,45 @@ export class Town {
       const fromSavings = (a.savings ?? 0) >= spec.coins;
       if (!fromSavings && this.loanCap(a) < spec.coins) continue;
       if (!this.eduRng.chance(ENTREPRENEUR_CHANCE)) continue;
-      if (fromSavings) { a.savings -= spec.coins; this.minted += spec.coins; }
-      else { this.borrowFromBank(a, spec.coins); a.coins -= spec.coins; }
-      const council = this.places.get("council"); const sawpit = this.places.get("sawpit");
-      const forPlanks = sawpit ? Math.min(spec.planks, spec.coins) : 0;
-      if (council) council.treasury += spec.coins - forPlanks;
-      if (sawpit) { sawpit.stock.planks = Math.max(0, (sawpit.stock.planks ?? 0) - spec.planks); const sawyer = sawpit.owner ? this.agents.get(sawpit.owner) : null; if (sawyer) sawyer.coins += forPlanks; else sawpit.treasury += forPlanks; }
-      plot.name = siteName("shop", a.persona.name, undefined);
-      plot.kind = "shop"; plot.owner = a.id; plot.sprite = "shop"; plot.site = null;
-      plot.sells = [{ item: "bread", base: 1 }, { item: "soup", base: 2 }, { item: "drink", base: 1 }];
-      stockShelf(this.pack, plot);
-      const jid = `${plot.id}.help`;
-      if (!this.jobs.has(jid)) this.jobs.set(jid, { id: jid, title: `help at ${plot.name}`, place: plot.id, wage: 2, hours: [9, 17], slots: 1, holders: [] });
+      if (fromSavings) a.savings -= spec.coins; else { this.borrowFromBank(a, spec.coins); a.coins -= spec.coins; }
+      this.minted += spec.coins; // the price came from savings put by, or a loan the bank made good — new coin to the till, not conjured from thin air (same accounting the wild-land purchase below already keeps)
+      this.distributeBuildCost(spec);
+      this.openShop(a, plot);
       this.emit("town.built", [a.id], plot.id, `${a.persona.name}, schooled and sharp, opened ${plot.name} on the ${plot.district}: a citizen's own enterprise, built on learning and capital.`, 0.85, { what: "shop", place: plot.id, entrepreneur: true });
       this.remember(a, `I opened ${plot.name}. It is mine, built on what I learned and saved.`, 0.9);
+      return;
+    }
+  }
+  /** Once a night: a magnate with capital enough puts up a shop outright, no loan or savings needed, and pays its help better than the going rate — capital finding work rather than sitting in a purse. At most one a night, and at most one shop to a magnate's name, the same restraint any founder keeps. Reuses the very same shop-opening and cost-distribution as an ordinary citizen's own enterprise; only where the money comes from, and what it pays, differ. */
+  private tryMagnateInvest(): void {
+    const plot = [...this.places.values()].find((p) => p.kind === "plot" && !p.site && !p.community);
+    if (!plot) return;
+    const spec = BUILDS.shop;
+    for (const a of this.agents.values()) {
+      if (!a.magnate) continue;
+      if ([...this.places.values()].some((p) => p.owner === a.id && p.kind === "shop")) continue;
+      if (a.coins - MAGNATE_RESERVE < spec.coins) continue;
+      a.coins -= spec.coins; // paid straight out of what they carry — no loan, no draw on the bank
+      this.distributeBuildCost(spec);
+      this.openShop(a, plot, 2 + MAGNATE_WAGE_BONUS);
+      this.emit("town.built", [a.id], plot.id, `${a.persona.name} put up the coin for ${plot.name} on the ${plot.district} outright, and is paying well for help there: capital finding work rather than sitting in a purse.`, 0.85, { what: "shop", place: plot.id, entrepreneur: true, magnate: true });
+      this.remember(a, `I paid for ${plot.name} myself, out of what I brought. It is mine, and I mean to pay well for good help.`, 0.9);
+      return;
+    }
+  }
+  /** Once a night: a magnate with more in hand than they need puts a slice of the surplus to work at the bank — capital the bank can then lend against, on top of anyone's own standing. Gradual (a fraction of the surplus each night, not a dump) and bounded (the pool that grows a borrower's cap tops out well short of the magnate's whole fortune). Purely a transfer — coins leave a purse and land in the bank's own till, so the island's books need no minting or burning to keep it straight. */
+  private tryMagnateDeploy(): void {
+    for (const a of this.agents.values()) {
+      if (!a.magnate) continue;
+      const surplus = a.coins - MAGNATE_RESERVE;
+      if (surplus <= 0) continue;
+      const chunk = Math.max(1, Math.floor(surplus * MAGNATE_DEPLOY_FRACTION));
+      const bank = this.bankPlace();
+      a.coins -= chunk; bank.treasury += chunk;
+      const grew = this.magnateBankPool < MAGNATE_POOL_CAP;
+      this.magnateBankPool = Math.min(MAGNATE_POOL_CAP, this.magnateBankPool + chunk);
+      if (grew) this.emit("town.notice", [a.id], bank.id, `${a.persona.name} put ${chunk} coins to work at ${bank.name}: capital the bank can now lend against.`, 0.55, { magnate: true, coins: chunk });
+      this.remember(a, `I put ${chunk} coins to work at ${bank.name}, rather than let it sit idle.`, 0.5);
       return;
     }
   }
@@ -2071,7 +2133,9 @@ export class Town {
   /** What this person could still be lent: a small sum on their name alone, more for savings put by and coin in hand, less whatever they already owe. Never negative. */
   loanCap(a: AgentState): number {
     const standing = Math.floor((a.savings ?? 0) * 0.5) + Math.floor(Math.max(0, a.coins) * 0.25);
-    return Math.max(0, BANK_LOAN_BASE_CAP + standing - (a.debt ?? 0));
+    // a magnate's capital, once banked, is real headroom for everyone's loan, not just their own — bounded, so no one fortune remakes the bank on its own
+    const magnateBoost = Math.floor(this.magnateBankPool * MAGNATE_LOAN_BOOST_RATE);
+    return Math.max(0, BANK_LOAN_BASE_CAP + standing + magnateBoost - (a.debt ?? 0));
   }
   /** Put spare coins by. They earn a little every night they sit there. */
   depositToBank(a: AgentState, amount: number): boolean {
