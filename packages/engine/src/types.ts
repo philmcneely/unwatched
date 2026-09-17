@@ -37,6 +37,8 @@ export interface Place {
   site: { what: "house" | "shop" | "garden"; name: string; by: AgentId; labor: number; laborNeeded: number; startedDay: number; look?: string; project?: string; workedDay?: Record<AgentId, number> } | null;
   /** How the builder wanted it to look, in their words. The island draws it from this; the hash of it names the sprite. */
   look?: string;
+  /** Once-wild land a citizen has bought from the town: absent means it is still open to anyone (unowned), or bought but not yet put to anything (owned). A farm yields a little food every night, more for a schooled, sharp owner; a park cannot be farmed or built on, but is a sight the island's visitors come to see, the same as any other. Whichever it becomes, it stays that way. */
+  landUse?: "farm" | "park";
 }
 
 export interface Job {

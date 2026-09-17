@@ -80,6 +80,20 @@ const EDU_WAGE_BONUS_MAX = 0.4;
 /** What it takes to start a business of one's own, and how often the town even looks: modest thresholds, checked once a night, so it is not spammy. */
 const ENTREPRENEUR_EDU_MIN = 0.55, ENTREPRENEUR_INT_MIN = 0.5, ENTREPRENEUR_CHANCE = 0.35;
 
+/**
+ * Wild land: a parcel the town has never put to any work — no job stands on it, nothing in the pack is produced from it
+ * (pinewood and the quarry are wild land already spoken for, and stay exactly what they are). A pack that defines no such
+ * idle parcel simply has none to sell, and this whole layer stays quiet — nothing to buy, nothing to farm, nothing to protect.
+ * Bought, it is put to the plough by a schooled owner (a farm, feeding the island a little every night) or left standing by
+ * anyone else (a park, drawing visitors the way any sight does). Whichever it becomes, it stays that way: a farm cannot be
+ * a park, and neither can be built on.
+ */
+const WILD_LAND_COST = 20; // land alone, no building on it yet — on the order of a house
+const WILD_LAND_CHANCE = 0.35; // checked once a night, like entrepreneurship, so parcels are not snapped up in a rush
+const LAND_DEVELOP_CHANCE = 0.5; // once bought, how often a night's thought turns idle land into something
+const LAND_FARM_EDU_MIN = 0.5; // an owner schooled at least this well puts bought land to the plough; anyone else leaves it standing as a park
+const FARM_YIELD_BASE = 1, FARM_YIELD_EDU_BONUS = 3; // a farm's nightly yield of food: modest alone, better for an educated, sharp owner
+
 export class Town {
   /** Minimum interval for routine NPC thoughts only; paid entitlements and urgent decisions are unaffected. */
   npcThoughtInterval = 0;
@@ -137,6 +151,7 @@ export class Town {
   fishery = 0; fisheryMax = 0; private overfished = false; // the sea's fish: a renewable stock that overfishing can crash
   private disasterRng!: Rng; // disasters draw from their own stream, so adding them doesn't perturb every seeded sim
   private eduRng!: Rng; // schooling and entrepreneurship draw from their own stream too, for the same reason
+  private landRng!: Rng; // wild land — buying it and putting it to use — draws from its own stream too, for the same reason
   private nextId = 1;
   private idPrefix = "";
   private nextEventId = 1;
@@ -161,6 +176,7 @@ export class Town {
     this.rng = new Rng(opts.seed);
     this.disasterRng = new Rng((opts.seed ?? 42) + 90210);
     this.eduRng = new Rng((opts.seed ?? 42) + 130717);
+    this.landRng = new Rng((opts.seed ?? 42) + 220462);
     this.brain = opts.brain;
     this.minutesPerTick = opts.minutesPerTick ?? 1;
     this.day = opts.startDay ?? 1;
@@ -254,7 +270,7 @@ export class Town {
     // what people built, over the map the code lays out: the code owns positions and roads, the record owns everything else
     for (const sp of snap.places ?? []) {
       const p = this.places.get(sp.id);
-      if (p) { if(sp.decorations)p.decorations=structuredClone(sp.decorations);else delete p.decorations; if(sp.institution)p.institution=structuredClone(sp.institution);else delete p.institution; if (sp.community) p.community = structuredClone(sp.community); else delete p.community; if (sp.history) p.history = structuredClone(sp.history); else delete p.history; p.name = sp.name; p.kind = sp.kind; p.sells = sp.sells; p.owner = sp.owner ?? null; p.site = structuredClone(sp.site ?? null); p.treasury = sp.treasury ?? p.treasury; if (sp.stock) p.stock = { ...sp.stock }; if (sp.look) p.look = sp.look; else delete p.look; if (sp.brokenUntil) p.brokenUntil = sp.brokenUntil; if (sp.beds) p.beds = sp.beds; else delete p.beds; if (sp.sprite) p.sprite = sp.sprite; if (sp.water) p.water = structuredClone(sp.water); else delete p.water; }
+      if (p) { if(sp.decorations)p.decorations=structuredClone(sp.decorations);else delete p.decorations; if(sp.institution)p.institution=structuredClone(sp.institution);else delete p.institution; if (sp.community) p.community = structuredClone(sp.community); else delete p.community; if (sp.history) p.history = structuredClone(sp.history); else delete p.history; p.name = sp.name; p.kind = sp.kind; p.sells = sp.sells; p.owner = sp.owner ?? null; p.site = structuredClone(sp.site ?? null); p.treasury = sp.treasury ?? p.treasury; if (sp.stock) p.stock = { ...sp.stock }; if (sp.look) p.look = sp.look; else delete p.look; if (sp.brokenUntil) p.brokenUntil = sp.brokenUntil; if (sp.beds) p.beds = sp.beds; else delete p.beds; if (sp.sprite) p.sprite = sp.sprite; if (sp.water) p.water = structuredClone(sp.water); else delete p.water; if (sp.landUse) p.landUse = sp.landUse; else delete p.landUse; }
     }
     for (const p of this.places.values()) stockShelf(this.pack, p); // a record from before shelves were counted gets its counts now
     for (const sj of snap.jobs ?? []) if (!this.jobs.has(sj.id) && this.places.has(sj.place)) this.jobs.set(sj.id, { ...sj, holders: [] });
@@ -1227,6 +1243,10 @@ export class Town {
     }
     // entrepreneurship: a schooled, sharp citizen with capital enough opens a shop of their own, at most one a night
     this.tryEntrepreneurship();
+    // wild land: bought at most one a night, then put to the plough or left standing as a park; a farm already standing yields food every night
+    this.tryBuyWildLand();
+    this.tryDevelopWildLand();
+    this.tendFarms();
     // a promise whose day has passed and which nobody settled is a promise broken, and the other side remembers it
     for (const a of this.agents.values()) for (const d of a.deals) {
       if (!d.mine || d.state !== "open" || d.due === null || this.t < d.due) continue;
@@ -1594,7 +1614,7 @@ export class Town {
   private tourism(): void {
     if (!this.boatRunning) return; // no boat, no visitors
     const inn = this.places.get("inn"); if (!inn) return; // nowhere to host them
-    const draws = [...this.places.values()].filter((p) => (p.kind === "public" || p.kind === "civic") && !(p.brokenUntil && p.brokenUntil > this.day));
+    const draws = [...this.places.values()].filter((p) => (p.kind === "public" || p.kind === "civic" || p.landUse === "park") && !(p.brokenUntil && p.brokenUntil > this.day));
     if (!draws.length) return;
     const charm = draws.reduce((s, p) => s + 1 + Math.min(3, p.decorations?.length ?? 0), 0); // a decorated attraction is worth more of a look
     const feast = this.feastToday();
@@ -2000,6 +2020,52 @@ export class Town {
       this.emit("town.built", [a.id], plot.id, `${a.persona.name}, schooled and sharp, opened ${plot.name} on the ${plot.district}: a citizen's own enterprise, built on learning and capital.`, 0.85, { what: "shop", place: plot.id, entrepreneur: true });
       this.remember(a, `I opened ${plot.name}. It is mine, built on what I learned and saved.`, 0.9);
       return;
+    }
+  }
+  /** Wild land the town has never put to work: no job stands there, and nothing in the pack is produced from it. Pinewood and the quarry, say, are wild land already spoken for, and are never for sale. A pack that defines no idle parcel of its own simply has none, and the whole layer stays quiet. */
+  private wildLandForSale(): Place | undefined {
+    return [...this.places.values()].find((p) => p.kind === "wild" && !p.owner && !p.landUse && ![...this.jobs.values()].some((j) => j.place === p.id) && !this.pack.produce.some((pr) => pr.place === p.id));
+  }
+  /** Once a night: a citizen with capital enough — savings, or a loan the bank will still carry — buys a wild parcel the town has never put to work. At most one purchase a night, and at most one parcel to a name, the same restraint entrepreneurship keeps. */
+  private tryBuyWildLand(): void {
+    const parcel = this.wildLandForSale(); if (!parcel) return;
+    for (const a of this.agents.values()) {
+      if ([...this.places.values()].some((p) => p.owner === a.id && p.kind === "wild")) continue; // one parcel to a name
+      const fromSavings = (a.savings ?? 0) >= WILD_LAND_COST;
+      if (!fromSavings && this.loanCap(a) < WILD_LAND_COST) continue;
+      if (!this.landRng.chance(WILD_LAND_CHANCE)) continue;
+      if (fromSavings) a.savings -= WILD_LAND_COST; else { this.borrowFromBank(a, WILD_LAND_COST); a.coins -= WILD_LAND_COST; }
+      this.minted += WILD_LAND_COST; // the price came from savings put by, or a loan the bank made good — new coin to the till, not conjured from thin air
+      const council = this.places.get("council"); if (council) council.treasury += WILD_LAND_COST;
+      parcel.owner = a.id;
+      this.emit("town.built", [a.id], parcel.id, `${a.persona.name} bought ${parcel.name} from the town: wild land of their own now, to farm or to leave standing.`, 0.6, { place: parcel.id, land: true, bought: true });
+      this.remember(a, `I bought ${parcel.name} from the town. It is mine to make something of.`, 0.75);
+      return;
+    }
+  }
+  /** Once a night: an owner who has bought wild land but not yet said what it is for decides — schooled enough, they put it to the plough; anyone else leaves it standing, a park for the island to enjoy. At most one parcel decided a night, and whichever it becomes, it stays that way. */
+  private tryDevelopWildLand(): void {
+    const parcel = [...this.places.values()].find((p) => p.kind === "wild" && p.owner && !p.landUse);
+    if (!parcel) return;
+    const owner = this.agents.get(parcel.owner!); if (!owner) return;
+    if (!this.landRng.chance(LAND_DEVELOP_CHANCE)) return;
+    const asFarm = this.edu(owner) >= LAND_FARM_EDU_MIN;
+    parcel.landUse = asFarm ? "farm" : "park";
+    if (asFarm) {
+      this.emit("town.built", [owner.id], parcel.id, `${owner.persona.name} broke ${parcel.name} to the plough: a farm of their own now, schooled enough to make it earn.`, 0.65, { place: parcel.id, farm: true });
+      this.remember(owner, `I put ${parcel.name} to the plough. It will feed the island, and me with it.`, 0.8);
+    } else {
+      this.emit("town.notice", [owner.id], parcel.id, `${owner.persona.name} left ${parcel.name} standing: a park now, open for anyone to come and look, and never to be farmed or built on.`, 0.65, { place: parcel.id, park: true });
+      this.remember(owner, `I am leaving ${parcel.name} as it stands, for the island to enjoy. It will draw a look, if not a crop.`, 0.75);
+    }
+  }
+  /** A night's yield off any farmed wild land: modest food into its own stock, better for an educated, sharp owner. A park, by design, is never farmed and makes nothing this way. */
+  private tendFarms(): void {
+    for (const p of this.places.values()) {
+      if (p.kind !== "wild" || p.landUse !== "farm" || !p.owner) continue;
+      const owner = this.agents.get(p.owner); if (!owner) continue;
+      const amount = FARM_YIELD_BASE + Math.round(FARM_YIELD_EDU_BONUS * clamp(0.6 * this.edu(owner) + 0.4 * this.intel(owner)));
+      p.stock.vegetables = (p.stock.vegetables ?? 0) + amount;
     }
   }
   /** What this person could still be lent: a small sum on their name alone, more for savings put by and coin in hand, less whatever they already owe. Never negative. */
