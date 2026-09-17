@@ -1,3 +1,4 @@
+import { npcReduction } from "./npc-population.ts";
 import { DigestCache } from "./digest-cache.ts";
 import { BoardingConnections, verifyBoardingKey } from "./boarding.ts";
 import { adminResolver, backofficeRoutes } from "./backoffice.ts";
@@ -328,7 +329,7 @@ type Enricher = { enrich(p: Persona, island: string): Promise<Partial<PersonaDep
 function enricherOf(b: Brain): Enricher | null { return "enrich" in b && typeof (b as { enrich?: unknown }).enrich === "function" ? (b as unknown as Enricher) : null; }
 async function deepen(a: AgentState): Promise<void> {
   const mind = enricherOf(townBrain); if (!mind || a.persona.habit) return;
-  try { const d = await mind.enrich(a.persona, TOWN_NAME); if (d) { const own = a.persona.voice ?? []; const voice = [...own, ...(d.voice ?? [])].slice(0, 3); a.persona = { ...a.persona, ...(d.habit ? { habit: d.habit } : {}), ...(d.skill ? { skill: d.skill } : {}), ...(d.flaw ? { flaw: d.flaw } : {}), ...(a.persona.cameBecause || d.cameBecause ? { cameBecause: a.persona.cameBecause || d.cameBecause! } : {}), ...(voice.length ? { voice } : {}) }; log(`depth for ${a.persona.name}: ${d.habit ?? "written"}`); } }
+  try { const d = await mind.enrich(a.persona, TOWN_NAME); if (d) { const own = a.persona.voice ?? []; const voice = [...own, ...(d.voice ?? [])].slice(0, 3); a.persona = { ...a.persona, ...(d.habit ? { habit: d.habit } : {}), ...(!a.persona.skill && d.skill ? { skill: d.skill } : {}), ...(!a.persona.flaw && d.flaw ? { flaw: d.flaw } : {}), ...(a.persona.cameBecause || d.cameBecause ? { cameBecause: a.persona.cameBecause || d.cameBecause! } : {}), ...(voice.length ? { voice } : {}) }; log(`depth for ${a.persona.name}: ${d.habit ?? "written"}`); } }
   catch (err) { log(`depth failed for ${a.persona.name}: ${(err as Error).message}`); }
 }
 async function deepenAll(): Promise<void> {
@@ -366,7 +367,7 @@ if (telegramDb) app.route("/api", backofficeRoutes({db:telegramDb,ownerOf,adminO
 }));
 const owns = (a: { owner: string | null }, owner: string | null) => !!owner && a.owner === owner;
 
-const placeView = (p: import("@unwatched/engine").Place) => ({ decorations: p.decorations ?? [], community: publicProject(town, p), id: p.id, hasHistory: !!p.history, name: p.nickname ? `${p.name} (${p.nickname})` : p.name, kind: p.kind, exits: p.exits, crowd: town.crowd(p.id), x: p.x, y: p.y, district: p.district, sprite: p.sprite, landUse: p.landUse, ...(p.look ? { look: p.look } : {}), ...(Object.keys(p.stock).length ? { stock: p.stock } : {}), owner: p.owner ? (town.agents.get(p.owner)?.persona.name ?? null) : null, site: p.site ? { what: p.site.what, name: p.site.name, by: town.agents.get(p.site.by)?.persona.name ?? p.site.by, done: p.site.labor, of: p.site.laborNeeded } : null, beds: p.beds ? { price: p.beds.price, free: p.freeBeds ?? 0 } : null });
+const placeView = (p: import("@unwatched/engine").Place) => ({ storedCount: (p.keptStorage ?? []).reduce((n,b)=>n+b.items.length,0) + [...town.agents.values()].reduce((n,a)=>n+(a.storage?.find(s=>s.place===p.id)?.items.length??0),0), looseCount: p.looseItems?.length ?? 0, decorations: p.decorations ?? [], community: publicProject(town, p), id: p.id, hasHistory: !!p.history, name: p.nickname ? `${p.name} (${p.nickname})` : p.name, kind: p.kind, exits: p.exits, crowd: town.crowd(p.id), x: p.x, y: p.y, district: p.district, sprite: p.sprite, landUse: p.landUse, ...(p.look ? { look: p.look } : {}), ...(Object.keys(p.stock).length ? { stock: p.stock } : {}), owner: p.owner ? (town.agents.get(p.owner)?.persona.name ?? null) : null, site: p.site ? { what: p.site.what, name: p.site.name, by: town.agents.get(p.site.by)?.persona.name ?? p.site.by, done: p.site.labor, of: p.site.laborNeeded } : null, beds: p.beds ? { price: p.beds.price, free: p.freeBeds ?? 0 } : null });
 const childView = (ch: import("@unwatched/protocol").Child) => ({ id: ch.id, name: ch.name, days: town.day - ch.bornDay, ofAgeIn: Math.max(0, town.ageOfMajority - (town.day - ch.bornDay)), parents: ch.parentNames, home: town.places.get(ch.home)?.name ?? ch.home, orphan: ch.orphan, adopted: !!ch.adoptedBy });
 /** The far end of the boat. Another island puts a passenger here; they step off at our harbor with what they carry and what they remember. */
 // cargo: another island asks what we are short of, and sends what it has spare; the shelves pay
@@ -694,6 +695,31 @@ app.post("/api/ops/park-unfunded",async(c)=>{
   await store.snapshot(town);
   broadcast({type:"hello",clock:clockOf(town),agents:[...town.agents.values()].map(a=>publicAgent(town,a)),recent:town.events.slice(-80).map(publicEvent)});
   return c.json({moved:ids.size,remaining:town.agents.size});
+ }finally{worldTransition=false;}
+});
+app.get("/api/ops/npc-population",c=>{
+ const target=Number(c.req.query("target")??10);
+ if(!Number.isInteger(target)||target<5||target>10)return c.json({error:"Choose a target between 5 and 10."},400);
+ return c.json(npcReduction(town,target));
+});
+app.post("/api/ops/npc-population",async c=>{
+ const body=z.object({target:z.number().int().min(5).max(10),ids:z.array(z.string()).max(100)}).safeParse(await c.req.json());
+ if(!body.success)return c.json({error:"Review a population proposal first."},400);
+ if(ticking||worldTransition||boardingLocks.size)return c.json({error:"The world is updating. Review and retry."},409);
+ if(!store)return c.json({error:"Persistent storage is required."},503);
+ const plan=npcReduction(town,body.data.target);
+ if(!plan.canReachTarget)return c.json({error:"Protected citizens prevent this target. No citizens were moved."},409);
+ if(JSON.stringify([...body.data.ids].sort())!==JSON.stringify(plan.selected.map(a=>a.id).sort()))return c.json({error:"The population changed. Review a fresh proposal."},409);
+ worldTransition=true;
+ try{
+  await store.snapshot(town,true);
+  for(const selected of plan.selected){
+   await store.markLeft(selected.id,town.t);
+   town.removeAgent(selected.id,"left","Returned to the mainland as part of the island population adjustment.");
+  }
+  await store.snapshot(town,true);
+  broadcast({type:"hello",clock:clockOf(town),agents:[...town.agents.values()].map(a=>publicAgent(town,a)),recent:town.events.slice(-80).map(publicEvent)});
+  return c.json({moved:plan.selected.length,remaining:plan.remaining});
  }finally{worldTransition=false;}
 });
 app.get("/api/ops", async (c) => {
