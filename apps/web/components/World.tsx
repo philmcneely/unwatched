@@ -35,7 +35,7 @@ import townStyle from "./town/town.module.css";
  */
 const C = { ...GROUND, shell: CREAM, sage: SAGE, teal: TEAL, kelp: KELP, coral: CORAL, drift: DRIFT };
 
-type PlaceView = { decorations?: Decoration[]; community?: CommunityView; hasHistory?: boolean; id: string; name: string; kind: string; exits: string[]; x: number; y: number; district: string; sprite: string; stock?: Record<string, number>; look?: string; owner: string | null; site: { what: string; name: string; by: string; done: number; of: number } | null; crowd: number };
+type PlaceView = { decorations?: Decoration[]; community?: CommunityView; hasHistory?: boolean; id: string; name: string; kind: string; exits: string[]; x: number; y: number; district: string; sprite: string; landUse?: "farm" | "park"; stock?: Record<string, number>; look?: string; owner: string | null; site: { what: string; name: string; by: string; done: number; of: number } | null; crowd: number };
 type TownView = Clock & { id?: string; name?: string; size: { w: number; h: number }; places: PlaceView[] };
 
 
@@ -345,7 +345,37 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           const stand = local(p.kind === "shop" ? "shop" : "house");
           void lookSvg(p.sprite.slice(5)).then((svg) => { if (!svg || g.destroyed) return; const d = new Graphics(); try { d.svg(svg); } catch { return; } const b = d.getLocalBounds(); if (b.width < 1) return; const target = p.kind === "shop" ? 120 : 104; const sc = target / b.width; d.scale.set(sc); d.position.set(-(b.x + b.width / 2) * sc, -(b.y + b.height) * sc); d.zIndex = 0; stand?.destroy(); g.addChild(d); });
         } else {
-          local(p.sprite);
+          if (p.kind === "wild") {
+            // Wild land: untended scrub until an owner puts it to use; then it reads as a farm or a park. Drawn
+            // straight into this place's own group (already positioned at p.x,p.y), off the same seeded rnd()
+            // the coastline and the nature scatter use, so the choice of tuft, rock and tree is stable per parcel.
+            const wput = (name: string, dx: number, dy: number, flip = false) => { const d = drawThing(name); if (!d) return; const s = d.c; if (flip) s.scale.x *= -1; s.position.set(dx, dy); s.zIndex = 0; g.addChild(s); };
+            if (p.landUse === "farm") {
+              // put to the plough: the same worked-rows art the pack's own fields use
+              local(p.sprite);
+            } else if (p.landUse === "park") {
+              // left standing: a preserved grove over meadow, with a marker where the owner declared it so
+              const r = new Graphics();
+              r.ellipse(0, 6, 96, 32).fill({ color: mix(C.grass, 0xd9e6a8, 0.3), alpha: 0.55 });
+              r.moveTo(-70, 22).quadraticCurveTo(-10, 6, 55, 16).stroke({ width: 3, color: mix(C.earth, C.grass, 0.5), alpha: 0.35, cap: "round" }); // a worn path in from the road
+              g.addChild(r);
+              const spots: [number, number, string][] = [[-66, -8, "tree-small"], [-14, -26, "tree-large"], [40, -4, "tree-small"], [70, 12, "bush"], [-40, 14, "bush"]];
+              for (const [dx, dy, name] of spots) wput(name, dx + (rnd() * 2 - 1) * 6, dy + (rnd() * 2 - 1) * 4, rnd() < 0.5);
+              // a small marker board on a post, the way a bought plot gets one
+              const m = new Graphics(); m.moveTo(4, -10).lineTo(4, 4).stroke({ width: 2, color: 0xc9b58f }); m.roundRect(-14, -22, 32, 10, 2).fill(C.shell).stroke({ width: 1.2, color: C.kelp }); m.zIndex = 1; g.addChild(m);
+            } else {
+              // untended: rough ground, loose rock, no tidy rows — reads as open land still to be claimed
+              const r = new Graphics();
+              r.ellipse(0, 8, 92, 30).fill({ color: mix(C.earth, C.rock, 0.35), alpha: 0.6 });
+              for (let i = 0; i < 10; i++) { const tx = -78 + rnd() * 156, ty = -6 + rnd() * 26; r.ellipse(tx, ty, 3 + rnd() * 4, 1.6 + rnd() * 2).fill({ color: mix(C.grass, C.earth, 0.4), alpha: 0.4 + rnd() * 0.3 }); }
+              g.addChild(r);
+              wput("rock", -50 + rnd() * 20, 10 + rnd() * 6, rnd() < 0.5);
+              wput("rock", 40 + rnd() * 20, 4 + rnd() * 8, rnd() < 0.5);
+              if (rnd() < 0.6) wput("bush", rnd() * 40 - 20, -4 + rnd() * 10, rnd() < 0.5);
+            }
+          } else {
+            local(p.sprite);
+          }
           if (p.stock) { const st = drawStock(p.sprite, p.stock); if (st) { st.zIndex = 1; g.addChild(st); } }
           // the shelf is bare: a board leans by the door until the cart or the work fills it again
           if (p.stock && (p.kind === "shop" || p.kind === "workplace" || p.kind === "market") && Object.values(p.stock).every((v) => v <= 0)) { const sg = drawSign("nothing left"); sg.position.set(-58, -10); sg.zIndex = 2; g.addChild(sg); const st = new Text({ text: "Sold out", style: { ...smallStyle, fontSize: 7, stroke: { color: 0xeee3cc, width: 0 } } }); st.anchor.set(0.5, 0.5); st.position.set(-58, -33); st.zIndex = 3; g.addChild(st); }
@@ -581,7 +611,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         return f;
       };
       const moveTo = (id: string, place: string) => { const f = figs.current.get(id); if (!f) return; releaseSeat(f); const seat = seatOf.current.get(place) ?? 0; seatOf.current.set(place, (seat + 1) % 10); const sp = spot(place, seat); if (f.place && f.place !== place) wear.step(f.place, place); f.tx = sp.x; f.ty = sp.y; f.place = place; const a = agents.current.get(id); if (a) { a.location = place; a.place = places.get(place)?.name ?? place; } };
-      const refreshPlaces = async () => { try { const t = (await (await fetch(`${API}/api/town`, { cache: "no-store" })).json()) as TownView; for (const p of t.places) { const old = places.get(p.id); places.set(p.id, p); if (!old || old.kind !== p.kind || old.name !== p.name || JSON.stringify(old.decorations) !== JSON.stringify(p.decorations) || JSON.stringify(old.community) !== JSON.stringify(p.community) || JSON.stringify(old.site) !== JSON.stringify(p.site) || JSON.stringify(old.stock) !== JSON.stringify(p.stock)) drawPlace(p); } setPlaceInfo(info => { const p = info ? places.get(info.id) : null; return info && p ? { ...info, decorations:p.decorations, community: p.community, stock: p.stock, site: p.site, kind: p.kind, sprite: p.sprite, name: p.name, hasHistory: p.hasHistory } : info; }); } catch {} };
+      const refreshPlaces = async () => { try { const t = (await (await fetch(`${API}/api/town`, { cache: "no-store" })).json()) as TownView; for (const p of t.places) { const old = places.get(p.id); places.set(p.id, p); if (!old || old.kind !== p.kind || old.name !== p.name || old.landUse !== p.landUse || JSON.stringify(old.decorations) !== JSON.stringify(p.decorations) || JSON.stringify(old.community) !== JSON.stringify(p.community) || JSON.stringify(old.site) !== JSON.stringify(p.site) || JSON.stringify(old.stock) !== JSON.stringify(p.stock)) drawPlace(p); } setPlaceInfo(info => { const p = info ? places.get(info.id) : null; return info && p ? { ...info, decorations:p.decorations, community: p.community, stock: p.stock, site: p.site, kind: p.kind, sprite: p.sprite, name: p.name, hasHistory: p.hasHistory } : info; }); } catch {} };
 
       // Full population snapshots are authoritative, including citizens who were moved off island.
       const syncPopulation = (list: PublicAgent[]) => {
