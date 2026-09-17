@@ -30,6 +30,8 @@ export interface TownOptions {
   /** Other islands a boat runs to, and how to put someone on it. Resolves true when they arrived there. */
   harbors?: { id: string; name: string }[];
   onDepart?: (passenger: Passenger, to: string) => Promise<boolean>;
+  /** The seat of the whole federation — its council has resident police and enforces at once; every other island has none of its own and must wait for word to cross the water. Off by default: a lone island keeps the old, undelayed hearing timing. */
+  isCapital?: boolean;
   /** Sim minutes per tick. 1 is the real town. Higher is coarser, not just faster. */
   minutesPerTick?: number;
   startDay?: number;
@@ -112,6 +114,10 @@ export class Town {
   ageOfMajority: number;
   /** Ops switches. Each flip is an act of God and gets printed. */
   paused = false; economyFrozen = false; boatHeld = false;
+  /** Whether this island is the capital: the seat of the federation's police. Off islands have none of their own — see `police`. */
+  readonly isCapital: boolean;
+  /** How much resident police presence this island has. Light and coarse on purpose: 1 on the capital, 0 everywhere else. Nothing yet reads it but the crossing-delay and fugitive-catching logic below; a future island could be given its own. */
+  readonly police: number;
   /** Coins that entered the island (arrivals, the mainland paying for produce) and left it (departures), so the books can be checked. */
   minted = 0; burned = 0;
   fishery = 0; fisheryMax = 0; private overfished = false; // the sea's fish: a renewable stock that overfishing can crash
@@ -136,6 +142,7 @@ export class Town {
     this.pack = opts.pack ?? ISLAND; this.places = makePlaces(this.pack); this.jobs = makeJobs(this.pack);
     this.ageOfMajority = opts.ageOfMajority ?? 20;
     this.harbors = opts.harbors ?? []; this.name = opts.name ?? "The island"; this.onDepart = opts.onDepart ?? null;
+    this.isCapital = opts.isCapital ?? false; this.police = this.isCapital ? 1 : 0;
     this.rng = new Rng(opts.seed);
     this.disasterRng = new Rng((opts.seed ?? 42) + 90210);
     this.brain = opts.brain;
@@ -208,7 +215,7 @@ export class Town {
       home: { place: "inn", nightsPaid: 3 }, asleep: false, arrivedAt: this.t,
       skills: [], practice: null, relationships: new Map(), memory: [], foodAdvice: [], foodLessons: [], foodRoutineDecisions: [],
       budget: { tier1Max: 50, tier2Max: 5, tier1Left: 50, tier2Left: 5, ...o.budget },
-      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, convictions: 0, notoriety: 0, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
+      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
       funded: o.funded ?? true, owner: o.owner ?? null, letters: [], intentions: [],
       lastConversation: -999, lastThought: -999, heard: [], workedToday: false, rumors: [], appearance: null, instructions: "", brainKind: "hosted", thinkEvery: null,
       seenToday: [], trustDawn: {}, trustLog: [], lastHungerThought: -999, starvingThoughtDay: 0, debtThoughtDay: 0, gatheringThoughtId: null, replyTo: null,
@@ -246,7 +253,7 @@ export class Town {
         skills: structuredClone(sa.state.skills ?? []), practice: structuredClone(sa.state.practice ?? null), lastSkillTrialDay: sa.state.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(sa.state.foodAdvice ?? []), foodLessons: structuredClone(sa.state.foodLessons ?? []), foodRoutineDecisions: structuredClone(sa.state.foodRoutineDecisions ?? []),
         memory: [...sa.memory].sort((x, y) => x.t - y.t),
         budget: { ...sa.state.budget }, funded: sa.funded, owner: sa.owner, letters: sa.state.letters ?? [], intentions: [...sa.state.intentions],
-        deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
+        deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
         seenToday: [], trustDawn: Object.fromEntries(sa.relationships.map((r) => [r.other, r.trust])), trustLog: [...(sa.state.trustLog ?? [])], lastHungerThought: sa.state.lastHungerThought ?? -999, starvingThoughtDay: sa.state.starvingThoughtDay ?? 0, debtThoughtDay: sa.state.debtThoughtDay ?? 0, gatheringThoughtId: sa.state.gatheringThoughtId ?? null, replyTo: sa.state.replyTo ?? null,
       };
       this.agents.set(a.id, a);
@@ -271,7 +278,7 @@ export class Town {
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
         id: a.id, persona: a.persona, owner: a.owner, funded: a.funded, appearance: a.appearance, arrivedAt: a.arrivedAt,
-        state: { desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, convictions: a.convictions, notoriety: a.notoriety, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
+        state: { desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
@@ -924,7 +931,11 @@ export class Town {
       }
       case "accuse": {
         const b = this.agents.get(action.who) ?? [...this.agents.values()].find((x) => x.persona.name.toLowerCase() === action.who.toLowerCase()); if (!b) break;
-        const today = this.hour < 15; const day = today ? this.day : this.day + 1;
+        // no resident police off the capital: word of the charge has to cross by boat before the council can act, so a federated island's hearing always waits for tomorrow.
+        // the capital has its own police at hand and hears it the moment the council's hours allow — same day, if there is still time.
+        const crossing = this.harbors.length > 0 && this.police === 0;
+        const day = crossing ? this.day + 1 : (this.hour < 15 ? this.day : this.day + 1);
+        const today = day === this.day;
         this.noteNotoriety(b, 0.1); // a mere accusation, unproven, still nudges how the town sees them
         this.gather("hearing", "council", day, 15, [a.id, b.id], action.of);
         this.emit("town.verdict", [a.id, b.id], here.id, `${name} accused ${b.persona.name} before the council: “${action.of}”. The council hears it ${today ? "today" : "tomorrow"} at three, in front of the town.`, 0.6, { stage: "charge" });
@@ -933,6 +944,8 @@ export class Town {
         break;
       }
       case "leave": {
+        // boarding the boat with an unheard charge against them, before the council could hear it: they become a fugitive, a name the record will remember even where the charge cannot follow.
+        const pending = this.pendingHearingFor(a.id); if (pending) this.markFugitive(a, pending);
         const harbor = action.to ? this.harbors.find((h) => h.id === action.to || h.name.toLowerCase() === action.to!.toLowerCase() || h.name.toLowerCase().includes(action.to!.toLowerCase())) : null;
         if (harbor && this.onDepart) { this.sailing.push({ a, to: harbor.id, why: action.why ?? null }); return true; } // the crossing happens at the end of the minute
         const fare = Math.min(BOAT_FARE, a.coins); a.coins -= fare; this.landFare(fare); // the boat off the island is not free either
@@ -1324,7 +1337,7 @@ export class Town {
   /** What a person takes with them on the boat: who they are, what they carry, what they remember, and the news from here. */
   passengerOf(a: AgentState, why: string | null): Passenger {
     const paper = this.papers[this.papers.length - 1];
-    return {
+    const passenger = {
       from: { id: this.idPrefix || "island", name: this.name },
       persona: a.persona, appearance: a.appearance, owner: a.owner, coins: a.coins, inventory: a.inventory.filter((i) => i !== "suitcase"),
       memories: compress(a.memory, 240).map((m) => ({ t: m.t, text: m.text, importance: m.importance, kind: m.kind })),
@@ -1332,7 +1345,10 @@ export class Town {
       instructions: a.instructions, why,
       skills: (a.skills??[]).filter(s=>s.successes>0).slice(0,12).map(s=>({recipe:s.recipe,origin:s.origin})),
       news: paper ? [paper.lead.headline, ...paper.briefs.slice(0, 3).map((b) => b.headline)] : [],
+      // not part of the wire schema — carried only for another engine's arrive() to read back in-process. A crossing over the wire loses it, same as any other unlisted field.
+      fugitive: a.fugitive ?? false, notoriety: a.notoriety,
     };
+    return passenger as Passenger;
   }
   /** Put the minute's leavers on the boat. If the far harbor does not answer, they stay, and it is news. */
   private async sail(): Promise<void> {
@@ -1372,6 +1388,23 @@ export class Town {
       this.emit("boat.news", [a.id], "harbor", `The boat from ${p.from.name} brought news: ${p.news.join("; ")}.`, 0.5, { from: p.from.id, news: p.news });
       for (const w of this.nearby(a)) for (const n of p.news.slice(0, 2)) this.remember(w, `News from ${p.from.name}, a day old: ${n}`, 0.45, "rumor");
     }
+    // a name's trouble crosses the water even where the charge cannot: notoriety and fugitive status ride along with whoever carries them, in-process only (see passengerOf)
+    const carried = p as unknown as { fugitive?: boolean; notoriety?: number };
+    a.notoriety = clamp(carried.notoriety ?? 0);
+    if (carried.fugitive) {
+      if (this.police > 0) {
+        // the capital is the seat of the law: a known fugitive is caught the moment they step off the pier
+        a.fugitive = false; a.convictions++; this.noteNotoriety(a, 0.2);
+        this.emit("town.notice", [a.id], "harbor", `${a.persona.name} stepped off the boat into the watch's hands: known as a fugitive from ${p.from.name}, and ${this.name} does not let that pass.`, 0.85, { caught: true, from: p.from.id });
+        this.remember(a, "The watch was waiting on the pier. They knew what I was before I said a word.", 0.95);
+      } else {
+        // no resident police here either, but the name is known: the town keeps a wary eye rather than turning a blind one
+        a.fugitive = true;
+        this.emit("town.notice", [a.id], "harbor", `${a.persona.name} came ashore at ${this.name} with a name already known: word of trouble from ${p.from.name} rode the same boat.`, 0.6, { fugitive: true, from: p.from.id });
+      }
+    }
+    // a notorious or fugitive newcomer draws wariness from whoever is on the pier to see it — the same light trust-bias the crime record already gives a convicted name
+    if (a.notoriety > 0 || a.fugitive) for (const w of this.nearby(a)) this.nudge(w, a.id, -0.05 - a.notoriety * 0.1, -0.02);
     return a;
   }
 
@@ -2192,6 +2225,17 @@ export class Town {
   private noteNotoriety(a: AgentState, delta: number): void {
     const before = a.notoriety; a.notoriety = clamp(a.notoriety + delta);
     if (before < 0.5 && a.notoriety >= 0.5) this.emit("town.notice", [a.id], a.location, `${a.persona.name}'s name has grown notorious around ${this.name}.`, 0.55, { notoriety: Math.round(a.notoriety * 100) / 100 });
+  }
+  /** The hearing still waiting on the calendar with them as the accused, if any — unheard, and so no verdict has been reached yet. */
+  private pendingHearingFor(id: AgentId): Gathering | null {
+    return this.gatherings.find((g) => g.kind === "hearing" && !g.held && g.actors[1] === id) ?? null;
+  }
+  /** They boarded the boat before the council could hear the charge against them. The charge cannot cross the water, but their name — and their notoriety — travels with them. */
+  private markFugitive(a: AgentState, g: Gathering): void {
+    if (a.fugitive) return;
+    a.fugitive = true;
+    this.emit("town.notice", [a.id], a.location, `${a.persona.name} boarded the boat with a hearing still on the calendar, unheard. ${this.name} will remember the name if it turns up again.`, 0.7, { fugitive: true, gathering: g.id });
+    this.remember(a, "I left before the council could hear the charge against me. I cannot go back to that harbor and pretend I never heard of it.", 0.9);
   }
   /** Remember only the public condition of the place actually occupied, not remote world state. */
   private rememberPlace(a: AgentState): string {

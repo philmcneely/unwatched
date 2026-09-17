@@ -164,6 +164,8 @@ export interface AgentState {
   convictions: number;
   /** How notorious they are, 0..1: rises on accusation and more on a guilty verdict, fades slowly with quiet days. Reputational, not judicial — colors how the town regards them without a new decision of its own. */
   notoriety: number;
+  /** Set when they board the boat with a hearing already on the calendar against them, unheard. No resident police off the capital, so the charge cannot follow them across the water — but their notoriety does, and the capital remembers the name if they ever surface there. Cleared only if the capital catches up with them. */
+  fugitive?: boolean;
   /** Other people's secrets this person has learned, by whose id. */
   secretsKnown: Record<AgentId, string>;
   /** What they chose to keep an eye on: names of people, places, things. Their attention goes there. */
@@ -306,7 +308,7 @@ export interface AgentSnapshot {
   foodLessons?: import("./learning.ts").FoodLesson[];
   foodRoutineDecisions?: import("./learning.ts").FoodRoutineDecision[];
     deals?: Deal[];
-    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; savings?: number; debt?: number; debtPrincipal?: number; convictions?: number; notoriety?: number; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
+    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; savings?: number; debt?: number; debtPrincipal?: number; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
     /** kept so a restart does not ask the same question twice, or forget a letter it promised to answer */
     lastPlan?: ActivePlan | null; replyTo?: number | null; lastHungerThought?: number; starvingThoughtDay?: number; debtThoughtDay?: number; gatheringThoughtId?: number | null;
   };
