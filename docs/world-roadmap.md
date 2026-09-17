@@ -328,3 +328,53 @@ the engine already simulates but never exercises.
    is an L-sized subsystem; take them one hypothesis at a time, and for every one,
    confirm it changes what an owner reads tomorrow (rule 6) and never opens a path from
    credits to coins (rule 3).
+
+---
+
+## 6. Newly identified — not previously on the roadmap (2026-09-17)
+
+Gaps neither the original roadmap nor Phil's earlier list named, judged against the six
+rules (consequence, influence-not-command, the digest is the product). Roughly ordered by
+how much each would change what the world *feels* like.
+
+1. **Inheritance & legacy on death.** We built property, banks and businesses but not what
+   happens when an owner dies — the single biggest missing *consequence*. Wills, contested
+   estates, a widow who inherits a debt, a shop that passes on or is fought over, dynasties,
+   feuds. Today death is a dead end; it should be a story engine. **(highest-leverage)**
+2. **Rumor / reputation as a propagating system.** Gossip that spreads and mutates across the
+   social graph and rides the boats — the *emergent* version of "trouble follows a person,"
+   far better than the hardcoded fugitive flag, and it gives the exposé/paper real teeth.
+3. **Factions — unions, guilds, parties, faiths.** The unionizer provocateur has nothing to
+   organize into. Interest-groups forming from shared circumstance and pushing against each
+   other is where real politics, sabotage, and the mainland's leverage come from.
+4. **Inter-island trade & specialization — not just aid.** Comparative advantage → dependency
+   → leverage. This is what makes embargo / blockade / tariff / friction actually *bite*;
+   today the hostility layer has little economic teeth because islands don't need each
+   other's goods. **(highest-leverage — makes the whole hub/hostility layer mean something)**
+5. **Culture drift.** Islands becoming distinct in values, customs, dialect, cuisine from
+   their own history — so they diverge in more than silhouette. What makes a five-island
+   world worth watching over months.
+6. **Disease / epidemic as a disaster that rides the boats.** Fire/flood are local; a plague
+   that travels couples the travel + fugitive + aid + relations systems into one story.
+7. **The reader's own influence-not-command lever.** The product is the digest — but what can
+   a *watcher* actually do? Seed a rumor, a windfall, a stranger, a drought — nudges, never
+   commands. That interaction seam is the product's actual hook and it doesn't exist yet.
+
+## 7. Operational debt (blocking / infra, 2026-09-17)
+
+- **DIGEST IS DOWN (critical).** The archipelago runs on a free OpenRouter model
+  (`nemotron:free`), which is rate-limited to lockout (HTTP 429) under the sim's call volume.
+  Routine (decide) squeaks through; the **reflect-tier — reflection, persona depth, and the
+  newspaper/digest itself — fails entirely** (`Model unavailable … no synthetic response`).
+  The product is not being produced. Fix: move cognition to the local qwen pool (apol + drtheo,
+  4 cards now up) — reflect/paper are nightly and latency-tolerant; $0 and no rate limits.
+- **Cognition is on free cloud, not the intended local fleet**, and the cast is capped at
+  ~6/island by throughput. Revisit now that apol is recovered (4 local cards).
+- **Upstream reconcile (v0.14 → v0.16, 17 commits).** Upstream shipped a town-visual overhaul
+  and a crafting/belongings/items layer + onboarding, and independently added fishing — heavy
+  overlap with our `engine.ts`, `types.ts`, `World.tsx`, and fishing. Merge is non-trivial and
+  worsening; needs a dedicated reconcile (take their items/crafting + visuals rather than
+  reinventing). Then merge `feature/multi-island` → `main`.
+- **apol boot fragility + Hermes alerting** from the 2026-09-15 incident: `egpu-init`'s
+  infinite start-timeout can wedge the whole boot; and a dropped-card should escalate to Hermes
+  (it only wrote to fleet-memory). Both still unfixed.
