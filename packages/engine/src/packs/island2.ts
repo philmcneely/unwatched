@@ -48,17 +48,21 @@ export const KESTREL: WorldPack = {
     P("bakery", "the isle bakery", "workplace", "town", "bakery", 1080, 320, ["chapel"], { sells: [{ item: "bread", base: 1 }], stock: { bread: 12, flour: 8 } }),
     P("tavern", "the Anchor", "public", "town", "tavern", 1420, 680, ["green"], { sells: [{ item: "drink", base: 1 }] }),
     P("chapel", "the sea chapel", "public", "town", "chapel", 1550, 320, []),
-    P("green", "the green", "public", "town", "well", 1500, 880, ["green-1", "green-2"]),
+    P("green", "the green", "public", "town", "well", 1500, 880, ["green-1", "green-2", "ternflat"]),
     P("green-1", "a plot on the green", "plot", "town", "plot", 1350, 1020, []),
     P("green-2", "the far plot on the green", "plot", "town", "plot", 1650, 1000, []),
     // The middle flats — the salt pans and the isle's thin grain, strung along the spine between town and cliffs.
     P("saltpan", "the salt pans", "workplace", "flats", "field", 1950, 480, ["fields", "kelpshore"], { sells: [{ item: "salt", base: 2 }], stock: { salt: 12 } }),
     P("fields", "the thin fields", "workplace", "flats", "field", 2150, 260, [], { stock: { grain: 24 } }),
     // The cliffs and the shore, at the eastern tip — the kelp, the light, and a plot on the point.
-    P("cliffpath", "the cliff path", "public", "cliffs", "searocks", 2500, 560, ["kelpshore", "lighthouse"]),
+    P("cliffpath", "the cliff path", "public", "cliffs", "searocks", 2500, 560, ["kelpshore", "lighthouse", "dunes"]),
     P("kelpshore", "the kelp shore", "workplace", "cliffs", "bench", 2750, 320, [], { sells: [{ item: "kelp", base: 1 }], stock: { kelp: 20 } }),
     P("lighthouse", "the Kestrel light", "public", "cliffs", "lighthouse", 3020, 680, ["point-1"]),
     P("point-1", "the plot on the point", "plot", "cliffs", "plot", 2900, 860, []),
+    // Idle wild land along the spit's open ground: no job on it and nothing in the pack is made from it,
+    // so the isle may one day sell it to whoever has saved enough — a farm, or a park kept wild for the terns.
+    P("ternflat", "the tern flats", "wild", "flats", "field", 1850, 220, ["green"]),
+    P("dunes", "the marram dunes", "wild", "cliffs", "field", 2300, 860, ["cliffpath"]),
   ],
   jobs: [
     { id: "fishhouse.gutter", title: "fish gutter", place: "fishhouse", wage: 2, hours: [5, 11], slots: 3 },

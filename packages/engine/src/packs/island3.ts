@@ -55,15 +55,19 @@ export const CAIRNHOLD: WorldPack = {
     P("coalpit", "the coal pit", "wild", "the diggings", "quarry", 2350, 1320, ["foundry", "ironadit", "charcoal"], { stock: { coal: 12 } }),
     P("charcoal", "the charcoal burner", "workplace", "the diggings", "sawpit", 2100, 1480, ["coalpit", "fells"], { stock: { coal: 6 } }),
     // The high fells
-    P("fells", "the high fells", "public", "the high fells", "well", 1950, 620, ["market", "chapel", "charcoal", "fields", "quarry", "crag", "fell-1"]),
+    P("fells", "the high fells", "public", "the high fells", "well", 1950, 620, ["market", "chapel", "charcoal", "fields", "quarry", "crag", "fell-1", "moor"]),
     P("fields", "the thin fields", "workplace", "the high fells", "field", 1650, 400, ["fells"], { stock: { grain: 18 } }),
     P("quarry", "the high quarry", "wild", "the high fells", "quarry", 2250, 480, ["fells", "crag"], { stock: { stone: 12 } }),
     P("fell-1", "a croft on the fells", "home", "the high fells", "boatshed", 1450, 340, ["fells"], { beds: { price: 1, capacity: 4 } }),
     // The crag
-    P("coast", "the coast road", "public", "the crag", "searocks", 1900, 1650, ["harbor", "crag"]),
+    P("coast", "the coast road", "public", "the crag", "searocks", 1900, 1650, ["harbor", "crag", "peatmoss"]),
     P("crag", "the crag path", "public", "the crag", "bench", 2450, 1000, ["fells", "quarry", "coast", "lighthouse"]),
     P("lighthouse", "the crag light", "public", "the crag", "lighthouse", 2700, 640, ["crag", "point-1"]),
     P("point-1", "the plot on the point", "plot", "the crag", "plot", 2620, 400, ["lighthouse"]),
+    // Idle wild land, out past the diggings and up on the open fells: no job on it and nothing in the pack is
+    // made from it — unlike the adits and pits — so the hold may one day sell it to whoever has saved enough.
+    P("moor", "the heather moor", "wild", "the high fells", "field", 1900, 220, ["fells"]),
+    P("peatmoss", "the peat moss", "wild", "the diggings", "field", 2400, 1620, ["coast"]),
   ],
   jobs: [
     { id: "ironadit.miner", title: "miner at the iron adit", place: "ironadit", wage: 3, hours: [6, 14], slots: 3 },

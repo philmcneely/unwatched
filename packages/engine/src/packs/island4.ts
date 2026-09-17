@@ -43,14 +43,14 @@ export const VINEHAVEN: WorldPack = {
     P("square", "the fountain square", "public", "old town", "well", 1420, 1400, ["market", "tavern", "sq-1"]),
     P("sq-1", "a plot off the square", "plot", "old town", "plot", 1300, 1560, ["square"]),
     // The Vineyard Terraces — sun-terraced vines, the press, and the villas
-    P("terracewalk", "the terrace walk", "public", "terraces", "lamp", 1980, 1300, ["market", "coast", "vineyard", "highvines", "winepress", "villa", "cottage", "grovewalk"]),
+    P("terracewalk", "the terrace walk", "public", "terraces", "lamp", 1980, 1300, ["market", "coast", "vineyard", "highvines", "winepress", "villa", "cottage", "grovewalk", "fallow"]),
     P("vineyard", "the Sunterrace vineyard", "workplace", "terraces", "orchard", 2200, 1500, ["terracewalk", "winepress"], { sells: [{ item: "grapes", base: 1 }], stock: { grapes: 20 } }),
     P("highvines", "the high vines", "workplace", "terraces", "orchard", 2460, 1440, ["terracewalk", "vineyard"], { sells: [{ item: "grapes", base: 1 }], stock: { grapes: 14 } }),
     P("winepress", "the wine press", "workplace", "terraces", "mill", 2260, 1220, ["terracewalk", "vineyard"], { sells: [{ item: "wine", base: 2 }], stock: { wine: 16, grapes: 12 } }),
     P("villa", "the terrace villa", "home", "terraces", "inn", 2020, 1520, ["terracewalk"], { beds: { price: 2, capacity: 4 } }),
     P("cottage", "the vine cottages", "home", "terraces", "boatshed", 2500, 1220, ["terracewalk"], { beds: { price: 1, capacity: 6 } }),
     // The Orchard Groves — olives and figs, the oil press, and the apiary
-    P("grovewalk", "the grove path", "public", "groves", "bench", 2000, 780, ["terracewalk", "grove", "figgrove", "olivepress", "apiary", "grov-1", "hillroad"]),
+    P("grovewalk", "the grove path", "public", "groves", "bench", 2000, 780, ["terracewalk", "grove", "figgrove", "olivepress", "apiary", "grov-1", "hillroad", "maquis"]),
     P("grove", "the olive grove", "workplace", "groves", "orchard", 2240, 620, ["grovewalk", "olivepress"], { sells: [{ item: "olives", base: 1 }, { item: "figs", base: 1 }], stock: { olives: 22, figs: 10 } }),
     P("figgrove", "the fig orchard", "workplace", "groves", "orchard", 2480, 660, ["grovewalk", "grove"], { sells: [{ item: "figs", base: 1 }], stock: { figs: 18 } }),
     P("olivepress", "the olive press", "workplace", "groves", "mill", 2260, 880, ["grovewalk", "grove"], { sells: [{ item: "oil", base: 2 }], stock: { oil: 14, olives: 12 } }),
@@ -62,6 +62,10 @@ export const VINEHAVEN: WorldPack = {
     P("mill", "the hill mill", "workplace", "the heights", "mill", 1760, 400, ["hillroad", "fields"], { stock: { flour: 24, grain: 10 } }),
     P("lighthouse", "the Vinehaven light", "public", "the heights", "lighthouse", 1980, 420, ["hillroad", "point-1"]),
     P("point-1", "the plot on the point", "plot", "the heights", "plot", 2140, 300, ["lighthouse"]),
+    // Idle wild land, out past the last worked terrace and grove: no job on it and nothing in the pack is made
+    // from it, so the isle may one day sell it to whoever has saved enough — a farm, or a park kept for the view.
+    P("fallow", "the fallow terrace", "wild", "terraces", "field", 2750, 1400, ["terracewalk"]),
+    P("maquis", "the wild maquis", "wild", "groves", "field", 2750, 500, ["grovewalk"]),
   ],
   jobs: [
     { id: "bakery.cook", title: "cook at the bakery", place: "bakery", wage: 3, hours: [6, 12], slots: 2 },
