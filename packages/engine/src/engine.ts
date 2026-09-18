@@ -8,7 +8,7 @@ import { recordBuildingMoment } from "./building-history.ts";
 import type { Action, ActionProposal, AgentId, PlaceId, Perception, TownEvent, EventKind, Paper, Reflection, DayPlan, Child, Passenger } from "@unwatched/protocol";
 import { OPTIONS_DEFAULT, Persona } from "@unwatched/protocol";
 import { Rng } from "./rng.ts";
-import type { AgentState, Deal, Brain, Budget, EventSink, Job, Place, Tier, Memory, TownSnapshot, AgentSnapshot, DigestContext, LifeContext, Gathering, Seal, JudgeContext, Rule, TownCulture } from "./types.ts";
+import type { AgentState, Deal, Brain, Budget, EventSink, Job, Place, Tier, Memory, TownSnapshot, AgentSnapshot, DigestContext, LifeContext, Gathering, Seal, JudgeContext, Rule, TownCulture, Rumor } from "./types.ts";
 import { makeJobs, makePlaces, FOOD_ITEMS, PERISHABLE, MINUTES_PER_DAY, SEASONS, BUILDS, GARDEN, WORKS, buildKind, lookHash, siteName, stockShelf, ISLAND, type WorldPack } from "./world.ts";
 import { retrieve, compress, age, drift, memoryForMind } from "./memory.ts";
 import { sha256, canonicalEvent } from "./hash.ts";
@@ -105,6 +105,20 @@ const DISEASE_RECOVER_MAX_DAYS = 6;
 const DISEASE_OUTBREAK_CHANCE = 0.002;
 const DISEASE_IMMUNE_DAYS = 10;
 const DISEASE_STRICKEN_SHARE = 0.25;
+
+/**
+ * Gossip, tuned the same modest way disease is: at a shared place, a copy of a rumor a person holds passes to
+ * someone who does not yet have word of it about one night in three or so, drifting a little in the telling
+ * and a little weaker for the hop; it fades further every quiet night regardless, and is dropped once too
+ * faint to matter; a person holds only so many at once, the strongest kept.
+ */
+const RUMOR_SPREAD_CHANCE = 0.4;
+const RUMOR_HOP_DECAY = 0.85;
+const RUMOR_DAILY_DECAY = 0.05;
+const RUMOR_MIN_STRENGTH = 0.08;
+const RUMOR_CAP_PER_AGENT = 8;
+/** Strong enough to be worth a word in the record — and so, through the paper's own importance floor, digest material. */
+const RUMOR_NOTICE_STRENGTH = 0.35;
 
 /** A boat ride is not free: the traveller pays this, and it goes to whoever runs the harbor — its owner, or its own till if no one owns it. Capped at what the traveller carries, so being broke never strands anyone. */
 const BOAT_FARE = 2;
@@ -220,6 +234,8 @@ export class Town {
   private nudgeLog: { kind: NudgeKind; key: string; t: number }[] = [];
   /** Strangers sent for by a nudge, waiting on their boat. They arrive as themselves and act on nothing but their own persona from the moment they step ashore. */
   private pendingStrangers: { atT: number; persona: Persona; coins: number; owner: string | null }[] = [];
+  private rumorRng!: Rng; // gossip draws from its own stream too, for the same reason
+  private nextRumorId = 1;
   /** Set once an outbreak has been announced to the town, so the notice does not repeat every night it stays severe; clears once the town is clear of it again. Not persisted — at worst the record re-announces once after a restart. */
   private strickenNotified = false;
   private nextId = 1;
@@ -251,6 +267,7 @@ export class Town {
     this.nudgeRng = new Rng((opts.seed ?? 42) + 424242);
     this.landRng = new Rng((opts.seed ?? 42) + 220462);
     this.diseaseRng = new Rng((opts.seed ?? 42) + 314159);
+    this.rumorRng = new Rng((opts.seed ?? 42) + 271828);
     this.brain = opts.brain;
     this.minutesPerTick = opts.minutesPerTick ?? 1;
     this.day = opts.startDay ?? 1;
@@ -325,7 +342,7 @@ export class Town {
       budget: { tier1Max: 50, tier2Max: 5, tier1Left: 50, tier2Left: 5, ...o.budget },
       plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, illness: { sick: false, since: 0, immuneUntil: 0 }, savings: 0, debt: 0, debtPrincipal: 0, magnate: o.magnate ?? false, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [], parents: null,
       funded: o.funded ?? true, owner: o.owner ?? null, letters: [], intentions: [],
-      lastConversation: -999, lastThought: -999, heard: [], workedToday: false, rumors: [], appearance: null, instructions: "", brainKind: "hosted", thinkEvery: null,
+      lastConversation: -999, lastThought: -999, heard: [], workedToday: false, rumors: [], gossip: [], appearance: null, instructions: "", brainKind: "hosted", thinkEvery: null,
       seenToday: [], trustDawn: {}, trustLog: [], lastHungerThought: -999, starvingThoughtDay: 0, debtThoughtDay: 0, gatheringThoughtId: null, replyTo: null,
     };
     const inn = this.places.get("inn")!; inn.freeBeds = Math.max(0, (inn.freeBeds ?? 0) - 1);
@@ -363,7 +380,7 @@ export class Town {
         skills: structuredClone(sa.state.skills ?? []), practice: structuredClone(sa.state.practice ?? null), lastSkillTrialDay: sa.state.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(sa.state.foodAdvice ?? []), foodLessons: structuredClone(sa.state.foodLessons ?? []), foodRoutineDecisions: structuredClone(sa.state.foodRoutineDecisions ?? []),
         memory: [...sa.memory].sort((x, y) => x.t - y.t),
         budget: { ...sa.state.budget }, funded: sa.funded, owner: sa.owner, letters: sa.state.letters ?? [], intentions: [...sa.state.intentions],
-        itemInstances: structuredClone(sa.state.itemInstances ?? []), nextItemId: sa.state.nextItemId ?? 0, equippedItem: sa.state.equippedItem ?? null, storage: structuredClone(sa.state.storage ?? []), activity: sa.state.activity ?? null, lastFishingDay: sa.state.lastFishingDay ?? -1, deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, illness: sa.state.illness ?? { sick: false, since: 0, immuneUntil: 0 }, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, magnate: sa.state.magnate ?? false, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
+        itemInstances: structuredClone(sa.state.itemInstances ?? []), nextItemId: sa.state.nextItemId ?? 0, equippedItem: sa.state.equippedItem ?? null, storage: structuredClone(sa.state.storage ?? []), activity: sa.state.activity ?? null, lastFishingDay: sa.state.lastFishingDay ?? -1, deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], gossip: structuredClone(sa.state.gossip ?? []), appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, illness: sa.state.illness ?? { sick: false, since: 0, immuneUntil: 0 }, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, magnate: sa.state.magnate ?? false, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
         seenToday: [], trustDawn: Object.fromEntries(sa.relationships.map((r) => [r.other, r.trust])), trustLog: [...(sa.state.trustLog ?? [])], lastHungerThought: sa.state.lastHungerThought ?? -999, starvingThoughtDay: sa.state.starvingThoughtDay ?? 0, debtThoughtDay: sa.state.debtThoughtDay ?? 0, gatheringThoughtId: sa.state.gatheringThoughtId ?? null, replyTo: sa.state.replyTo ?? null, parents: sa.state.parents ?? null,
       };
       this.agents.set(a.id, a);
@@ -391,7 +408,7 @@ export class Town {
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
         id: a.id, persona: a.persona, owner: a.owner, funded: a.funded, appearance: a.appearance, arrivedAt: a.arrivedAt,
-        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, illness: a.illness, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60), parents: a.parents ?? null },
+        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), gossip: structuredClone(a.gossip), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, illness: a.illness, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60), parents: a.parents ?? null },
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
@@ -1473,6 +1490,7 @@ export class Town {
       }
     }
     this.spreadIllness();
+    this.spreadRumors();
     await this.generations();
     this.wear();
     // debts come due
@@ -1666,6 +1684,8 @@ export class Town {
       fugitive: a.fugitive ?? false, notoriety: a.notoriety,
       // the sickness rides the same way: a traveller who boards still sick arrives sick, and one who boards with a fresh immunity keeps what is left of it — flags only, so the two islands' own day-counts never have to agree
       sickCarried: a.illness.sick, immuneCarried: this.day <= a.illness.immuneUntil,
+      // whatever is being said about them at home rides too: only the claims about the traveller themself travel — a subject's own id never resolves on the far shore, so gossip about anyone else could not nudge anything there anyway
+      rumorsCarried: a.gossip.filter((r) => r.about === a.id).slice(0, 3).map((r) => ({ claim: r.claim, strength: r.strength, hops: r.hops })),
     };
     return passenger as Passenger;
   }
@@ -1708,7 +1728,7 @@ export class Town {
       for (const w of this.nearby(a)) for (const n of p.news.slice(0, 2)) this.remember(w, `News from ${p.from.name}, a day old: ${n}`, 0.45, "rumor");
     }
     // a name's trouble crosses the water even where the charge cannot: notoriety and fugitive status ride along with whoever carries them, in-process only (see passengerOf)
-    const carried = p as unknown as { fugitive?: boolean; notoriety?: number; sickCarried?: boolean; immuneCarried?: boolean };
+    const carried = p as unknown as { fugitive?: boolean; notoriety?: number; sickCarried?: boolean; immuneCarried?: boolean; rumorsCarried?: { claim: string; strength: number; hops: number }[] };
     a.notoriety = clamp(carried.notoriety ?? 0);
     // a plague rides the boat the same in-process way: an infected traveller arrives infected, and it spreads from them here exactly as it would have at home
     if (carried.sickCarried) {
@@ -1733,6 +1753,14 @@ export class Town {
     }
     // a notorious or fugitive newcomer draws wariness from whoever is on the pier to see it — the same light trust-bias the crime record already gives a convicted name
     if (a.notoriety > 0 || a.fugitive) for (const w of this.nearby(a)) this.trustNudge(w, a.id, -0.05 - a.notoriety * 0.1, -0.02);
+    // a story about them can outrun no boat but this one: whatever was still being said of them at home rides along, held as their own knowledge of it, so it is there to pass on to whoever they meet here (see spreadRumors)
+    if (carried.rumorsCarried?.length) {
+      for (const rc of carried.rumorsCarried) {
+        const claim = drift(rc.claim, () => this.rumorRng.next());
+        this.giveRumor(a, { id: this.nextRumorId++, about: a.id, claim, strength: clamp(rc.strength * RUMOR_HOP_DECAY), heard: this.day, hops: rc.hops + 1 });
+      }
+      if (carried.rumorsCarried.some((r) => r.strength >= RUMOR_NOTICE_STRENGTH)) this.emit("town.notice", [a.id], "harbor", `${a.persona.name} came ashore at ${this.name} with talk already following them from ${p.from.name}.`, 0.6, { rumor: true, from: p.from.id });
+    }
     return a;
   }
 
@@ -2693,7 +2721,7 @@ export class Town {
     } else if (b.convictions >= 1 || guilt >= 3) {
       this.noteNotoriety(b, 0.3);
       if (a) this.remember(a, `The council found against ${b.persona.name} on my word, and sent them away.`, 0.9);
-      for (const w of witnesses) this.remember(w, `The council exiled ${b.persona.name} for ${guilt} offence${guilt === 1 ? "" : "s"}.`, 0.8, "rumor");
+      { const claim = `The council exiled ${b.persona.name} for ${guilt} offence${guilt === 1 ? "" : "s"}.`; for (const w of witnesses) { this.remember(w, claim, 0.8, "rumor"); this.giveRumor(w, this.makeRumor(b, claim, 0.85)); } }
       this.emit("town.gathering", g.actors, g.place, `The council heard ${accuser} against ${b.persona.name} (“${g.note}”) in front of ${who}. The record shows ${guilt} offence${guilt === 1 ? "" : "s"}${b.convictions ? " and a conviction already" : ""}: the boat.`, 1, { kind: g.kind, verdict: "exile", guilt, crowd: crowd.map((c) => c.id), held: true });
       this.removeAgent(b.id, "exiled", `Found against by the council, accused by ${accuser}.`);
     } else {
@@ -2710,7 +2738,7 @@ export class Town {
       this.remember(b, `The council fined me ${fine} coins on ${accuser}'s word, in front of everyone. One more and they will put me on the boat.`, 0.95);
       if (a) { this.remember(a, `The council fined ${b.persona.name} ${fine} coins on my word.`, 0.7); const r = b.relationships.get(a.id); if (r) r.trust = Math.max(0, r.trust - 0.4); }
       // a name already notorious draws a harsher public reaction to a fresh offence than a first-timer's would
-      for (const w of witnesses) { this.trustNudge(w, b.id, -0.1 - priorNotoriety * 0.1, -0.05 - priorNotoriety * 0.05); this.remember(w, `The council fined ${b.persona.name} ${fine} coins for "${g.note}".`, 0.6, "rumor"); }
+      { const claim = `The council fined ${b.persona.name} ${fine} coins for "${g.note}".`; for (const w of witnesses) { this.trustNudge(w, b.id, -0.1 - priorNotoriety * 0.1, -0.05 - priorNotoriety * 0.05); this.remember(w, claim, 0.6, "rumor"); this.giveRumor(w, this.makeRumor(b, claim, 0.5 + priorNotoriety * 0.2)); } }
       this.emit("town.gathering", g.actors, g.place, `The council heard ${accuser} against ${b.persona.name} (“${g.note}”) in front of ${who}. The record shows ${guilt} offence${guilt === 1 ? "" : "s"}: fined ${fine} coins. A second conviction means the boat.`, 0.95, { kind: g.kind, verdict: "fine", fine, guilt, crowd: crowd.map((c) => c.id), held: true });
     }
   }
@@ -2836,7 +2864,59 @@ export class Town {
   /** A name's standing with the town, apart from the record of convictions: rises on accusation and more on a guilty verdict, fades on its own with quiet days. Crossing into notoriety is worth a word in the paper. */
   private noteNotoriety(a: AgentState, delta: number): void {
     const before = a.notoriety; a.notoriety = clamp(a.notoriety + delta);
-    if (before < 0.5 && a.notoriety >= 0.5) this.emit("town.notice", [a.id], a.location, `${a.persona.name}'s name has grown notorious around ${this.name}.`, 0.55, { notoriety: Math.round(a.notoriety * 100) / 100 });
+    if (before < 0.5 && a.notoriety >= 0.5) {
+      this.emit("town.notice", [a.id], a.location, `${a.persona.name}'s name has grown notorious around ${this.name}.`, 0.55, { notoriety: Math.round(a.notoriety * 100) / 100 });
+      const claim = `${a.persona.name}'s name is turning notorious around ${this.name}.`;
+      for (const w of this.nearby(a)) this.giveRumor(w, this.makeRumor(a, claim, 0.55 + a.notoriety * 0.3));
+    }
+  }
+  /** A fresh claim about someone, as whoever first hears it holds it: full strength, no hops yet. */
+  private makeRumor(about: AgentState, claim: string, strength: number): Rumor {
+    return { id: this.nextRumorId++, about: about.id, claim, strength: clamp(strength), heard: this.day, hops: 0 };
+  }
+  /** Hand someone a copy of a rumor: one held claim per subject, the stronger and freshest version winning; the whole shelf is capped, the faintest dropped first. */
+  private giveRumor(a: AgentState, r: Rumor): void {
+    const have = a.gossip.find((x) => x.about === r.about);
+    if (have) { if (r.strength >= have.strength) { have.claim = r.claim; have.strength = r.strength; have.hops = r.hops; } have.heard = this.day; return; }
+    a.gossip.push(r);
+    if (a.gossip.length > RUMOR_CAP_PER_AGENT) { a.gossip.sort((x, y) => y.strength - x.strength); a.gossip.length = RUMOR_CAP_PER_AGENT; }
+  }
+  /**
+   * Once a night, at the same proximity `spreadIllness` reads: whoever holds a rumor may pass a copy to
+   * someone at the same place who does not yet have word of that subject, a little weaker and a little
+   * drifted for the telling. Hearing it colors how the hearer regards the subject, the same nudge machinery
+   * any first-hand dealing would use — reputation propagating through the graph, not just direct experience.
+   * Every rumor anyone still holds fades a little further regardless, and is forgotten once too faint to matter.
+   */
+  private spreadRumors(): void {
+    const alive = [...this.agents.values()]; if (!alive.length) return;
+    const byPlace = new Map<string, AgentState[]>();
+    for (const a of alive) (byPlace.get(a.location) ?? byPlace.set(a.location, []).get(a.location)!).push(a);
+    for (const group of byPlace.values()) {
+      if (group.length < 2) continue;
+      for (const knower of group) {
+        if (!knower.gossip.length) continue;
+        for (const r of [...knower.gossip]) {
+          for (const other of group) {
+            if (other === knower || other.id === r.about) continue; // a rumor is not news to its own subject
+            if (other.gossip.some((x) => x.about === r.about)) continue; // already has word of this one
+            if (!this.rumorRng.chance(RUMOR_SPREAD_CHANCE)) continue;
+            const claim = drift(r.claim, () => this.rumorRng.next());
+            this.giveRumor(other, { id: this.nextRumorId++, about: r.about, claim, strength: clamp(r.strength * RUMOR_HOP_DECAY), heard: this.day, hops: r.hops + 1 });
+            const passedRumor = other.gossip.find((x) => x.about === r.about)!;
+            if (this.agents.has(r.about) && r.about !== other.id) this.trustNudge(other, r.about, -0.04 - passedRumor.strength * 0.12, -0.02);
+            const subjectName = this.agents.get(r.about)?.persona.name ?? "someone";
+            this.remember(other, `${knower.persona.name} said something about ${subjectName}: ${claim}`, passedRumor.strength, "rumor");
+            if (passedRumor.strength >= RUMOR_NOTICE_STRENGTH) this.emit("town.notice", [other.id], other.location, `${other.persona.name} heard talk at ${this.places.get(other.location)?.name ?? other.location}: ${claim}`, Math.min(0.75, 0.3 + passedRumor.strength * 0.4), { rumor: r.about });
+          }
+        }
+      }
+    }
+    for (const a of alive) {
+      for (const r of a.gossip) r.strength = clamp(r.strength - RUMOR_DAILY_DECAY);
+      a.gossip = a.gossip.filter((r) => r.strength >= RUMOR_MIN_STRENGTH);
+      if (a.gossip.length > RUMOR_CAP_PER_AGENT) { a.gossip.sort((x, y) => y.strength - x.strength); a.gossip.length = RUMOR_CAP_PER_AGENT; }
+    }
   }
   /** The hearing still waiting on the calendar with them as the accused, if any — unheard, and so no verdict has been reached yet. */
   private pendingHearingFor(id: AgentId): Gathering | null {
