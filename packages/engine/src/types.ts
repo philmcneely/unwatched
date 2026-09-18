@@ -169,6 +169,8 @@ export interface AgentState {
   starving: number; roofless: number;
   /** Days in a row that ended dehydrated, for want of a drink. Two makes you weak, the same as hunger; it does not kill on its own. */
   parched: number;
+  /** A contagious sickness, physics not judgment: caught nearby or carried off the boat, it saps the body while it lasts (feeding the same hunger/thirst hardship a hungry or roofless day already does — there is no separate way to die of it), then passes. `since` is the day it began; `immuneUntil` is the day, if any, through which a recovered body resists catching it again. */
+  illness: { sick: boolean; since: number; immuneUntil: number };
   /** Coins on deposit at the bank, drawing modest interest each night. */
   savings: number;
   /** What is owed the bank: principal plus interest, capped like any debt at twice what was first borrowed. */
@@ -332,7 +334,7 @@ export interface AgentSnapshot {
   foodLessons?: import("./learning.ts").FoodLesson[];
   foodRoutineDecisions?: import("./learning.ts").FoodRoutineDecision[];
     deals?: Deal[];
-    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; savings?: number; debt?: number; debtPrincipal?: number; magnate?: boolean; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
+    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; illness?: AgentState["illness"]; savings?: number; debt?: number; debtPrincipal?: number; magnate?: boolean; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
     /** kept so a restart does not ask the same question twice, or forget a letter it promised to answer */
     lastPlan?: ActivePlan | null; replyTo?: number | null; lastHungerThought?: number; starvingThoughtDay?: number; debtThoughtDay?: number; gatheringThoughtId?: number | null;
   };

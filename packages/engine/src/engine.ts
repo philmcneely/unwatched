@@ -62,6 +62,14 @@ const WEATHERS = ["clear", "clear", "clear", "rain", "rain", "wind", "fog", "sto
 /** Work that happens under the sky: the weather takes its share of what these places make. */
 const OUTDOOR_WORK = new Set(["fishhouse", "fields", "orchard", "quarry", "pinewood", "sawpit"]);
 
+/** The sickness, tuned modest and slow: a sick body infects a healthy one sharing its place about one night in six; it throws the illness off within a week regardless, sooner about a third of nights; a recovered body resists catching it again for a spell; an outbreak with no traveller and no one yet sick is rare; "stricken" is said once a real share of the town is down with it. */
+const DISEASE_SPREAD_CHANCE = 0.18;
+const DISEASE_RECOVER_CHANCE = 0.35;
+const DISEASE_RECOVER_MAX_DAYS = 6;
+const DISEASE_OUTBREAK_CHANCE = 0.002;
+const DISEASE_IMMUNE_DAYS = 10;
+const DISEASE_STRICKEN_SHARE = 0.25;
+
 /** A boat ride is not free: the traveller pays this, and it goes to whoever runs the harbor — its owner, or its own till if no one owns it. Capped at what the traveller carries, so being broke never strands anyone. */
 const BOAT_FARE = 2;
 
@@ -168,6 +176,9 @@ export class Town {
   private disasterRng!: Rng; // disasters draw from their own stream, so adding them doesn't perturb every seeded sim
   private eduRng!: Rng; // schooling and entrepreneurship draw from their own stream too, for the same reason
   private landRng!: Rng; // wild land — buying it and putting it to use — draws from its own stream too, for the same reason
+  private diseaseRng!: Rng; // sickness draws from its own stream too, for the same reason: nightly/day-end never touches the shared rng
+  /** Set once an outbreak has been announced to the town, so the notice does not repeat every night it stays severe; clears once the town is clear of it again. Not persisted — at worst the record re-announces once after a restart. */
+  private strickenNotified = false;
   private nextId = 1;
   private idPrefix = "";
   private nextEventId = 1;
@@ -195,6 +206,7 @@ export class Town {
     this.disasterRng = new Rng((opts.seed ?? 42) + 90210);
     this.eduRng = new Rng((opts.seed ?? 42) + 130717);
     this.landRng = new Rng((opts.seed ?? 42) + 220462);
+    this.diseaseRng = new Rng((opts.seed ?? 42) + 314159);
     this.brain = opts.brain;
     this.minutesPerTick = opts.minutesPerTick ?? 1;
     this.day = opts.startDay ?? 1;
@@ -267,7 +279,7 @@ export class Town {
       education: o.education ?? EDU_STARTING,
       skills: [], practice: null, relationships: new Map(), memory: [], foodAdvice: [], foodLessons: [], foodRoutineDecisions: [],
       budget: { tier1Max: 50, tier2Max: 5, tier1Left: 50, tier2Left: 5, ...o.budget },
-      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, magnate: o.magnate ?? false, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
+      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, illness: { sick: false, since: 0, immuneUntil: 0 }, savings: 0, debt: 0, debtPrincipal: 0, magnate: o.magnate ?? false, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
       funded: o.funded ?? true, owner: o.owner ?? null, letters: [], intentions: [],
       lastConversation: -999, lastThought: -999, heard: [], workedToday: false, rumors: [], appearance: null, instructions: "", brainKind: "hosted", thinkEvery: null,
       seenToday: [], trustDawn: {}, trustLog: [], lastHungerThought: -999, starvingThoughtDay: 0, debtThoughtDay: 0, gatheringThoughtId: null, replyTo: null,
@@ -307,7 +319,7 @@ export class Town {
         skills: structuredClone(sa.state.skills ?? []), practice: structuredClone(sa.state.practice ?? null), lastSkillTrialDay: sa.state.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(sa.state.foodAdvice ?? []), foodLessons: structuredClone(sa.state.foodLessons ?? []), foodRoutineDecisions: structuredClone(sa.state.foodRoutineDecisions ?? []),
         memory: [...sa.memory].sort((x, y) => x.t - y.t),
         budget: { ...sa.state.budget }, funded: sa.funded, owner: sa.owner, letters: sa.state.letters ?? [], intentions: [...sa.state.intentions],
-        itemInstances: structuredClone(sa.state.itemInstances ?? []), nextItemId: sa.state.nextItemId ?? 0, equippedItem: sa.state.equippedItem ?? null, storage: structuredClone(sa.state.storage ?? []), activity: sa.state.activity ?? null, lastFishingDay: sa.state.lastFishingDay ?? -1, deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, magnate: sa.state.magnate ?? false, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
+        itemInstances: structuredClone(sa.state.itemInstances ?? []), nextItemId: sa.state.nextItemId ?? 0, equippedItem: sa.state.equippedItem ?? null, storage: structuredClone(sa.state.storage ?? []), activity: sa.state.activity ?? null, lastFishingDay: sa.state.lastFishingDay ?? -1, deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, illness: sa.state.illness ?? { sick: false, since: 0, immuneUntil: 0 }, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, magnate: sa.state.magnate ?? false, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
         seenToday: [], trustDawn: Object.fromEntries(sa.relationships.map((r) => [r.other, r.trust])), trustLog: [...(sa.state.trustLog ?? [])], lastHungerThought: sa.state.lastHungerThought ?? -999, starvingThoughtDay: sa.state.starvingThoughtDay ?? 0, debtThoughtDay: sa.state.debtThoughtDay ?? 0, gatheringThoughtId: sa.state.gatheringThoughtId ?? null, replyTo: sa.state.replyTo ?? null,
       };
       this.agents.set(a.id, a);
@@ -334,7 +346,7 @@ export class Town {
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
         id: a.id, persona: a.persona, owner: a.owner, funded: a.funded, appearance: a.appearance, arrivedAt: a.arrivedAt,
-        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
+        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, illness: a.illness, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
@@ -1320,6 +1332,7 @@ export class Town {
         this.removeAgent(a.id, "died", `Of hunger${winterRough ? " and cold" : ""}, at ${this.places.get(a.location)?.name ?? "the island"}.`);
       }
     }
+    this.spreadIllness();
     await this.generations();
     this.wear();
     // debts come due
@@ -1509,6 +1522,8 @@ export class Town {
       news: paper ? [paper.lead.headline, ...paper.briefs.slice(0, 3).map((b) => b.headline)] : [],
       // not part of the wire schema — carried only for another engine's arrive() to read back in-process. A crossing over the wire loses it, same as any other unlisted field.
       fugitive: a.fugitive ?? false, notoriety: a.notoriety,
+      // the sickness rides the same way: a traveller who boards still sick arrives sick, and one who boards with a fresh immunity keeps what is left of it — flags only, so the two islands' own day-counts never have to agree
+      sickCarried: a.illness.sick, immuneCarried: this.day <= a.illness.immuneUntil,
     };
     return passenger as Passenger;
   }
@@ -1551,8 +1566,17 @@ export class Town {
       for (const w of this.nearby(a)) for (const n of p.news.slice(0, 2)) this.remember(w, `News from ${p.from.name}, a day old: ${n}`, 0.45, "rumor");
     }
     // a name's trouble crosses the water even where the charge cannot: notoriety and fugitive status ride along with whoever carries them, in-process only (see passengerOf)
-    const carried = p as unknown as { fugitive?: boolean; notoriety?: number };
+    const carried = p as unknown as { fugitive?: boolean; notoriety?: number; sickCarried?: boolean; immuneCarried?: boolean };
     a.notoriety = clamp(carried.notoriety ?? 0);
+    // a plague rides the boat the same in-process way: an infected traveller arrives infected, and it spreads from them here exactly as it would have at home
+    if (carried.sickCarried) {
+      a.illness = { sick: true, since: this.day, immuneUntil: 0 };
+      this.emit("town.notice", [a.id], "harbor", `${a.persona.name} came ashore at ${this.name} already sick — whatever struck ${p.from.name} may have crossed the water with them.`, 0.65, { disease: "carried", from: p.from.id });
+      this.remember(a, "I came off the boat still sick. I should rest before I am fit for anything.", 0.8);
+      for (const w of this.nearby(a)) this.nudge(w, a.id, -0.03, -0.01); // wariness of a visibly sick newcomer — leaky, not a wall: the boat still lands them
+    } else if (carried.immuneCarried) {
+      a.illness = { sick: false, since: 0, immuneUntil: this.day + DISEASE_IMMUNE_DAYS };
+    }
     if (carried.fugitive) {
       if (this.police > 0) {
         // the capital is the seat of the law: a known fugitive is caught the moment they step off the pier
@@ -1761,11 +1785,12 @@ export class Town {
     for (const place of this.places.values()) for (const ex of this.pack.exports) { const surplus = (place.stock[ex.item] ?? 0) - ex.keep; if (surplus > 0) out.push({ item: ex.item, qty: surplus, price: ex.price, place: place.id }); }
     return out;
   }
-  /** An island in trouble: no flour and no bread, or its harbour/farms wrecked, or too many going hungry. Neighbours can see this (via the hub) and send food aid. */
+  /** An island in trouble: no flour and no bread, or its harbour/farms wrecked, or too many going hungry, or too many down sick. Neighbours can see this (via the hub) and send food aid, or a boat may go carefully. */
   get distressed(): boolean {
     if (this.flourShortage) return true;
     if (["fields", "harbor", "fishhouse", "fishquay", "bakery", "mill", "orchard"].some((id) => { const p = this.places.get(id); return !!(p?.brokenUntil && p.brokenUntil > this.day); })) return true;
     const n = this.agents.size; if (!n) return false;
+    if ([...this.agents.values()].filter((a) => a.illness.sick).length > n * DISEASE_STRICKEN_SHARE) return true;
     return [...this.agents.values()].filter((a) => a.starving >= 1).length > n * 0.3;
   }
   /** Food this island can spare to feed a neighbour in crisis — off its own shelves, past a slim reserve. A gift (price 0), not a sale. */
@@ -2007,12 +2032,14 @@ export class Town {
   // ---------- helpers ----------
   private decayNeeds(a: AgentState): void {
     const m = this.minutesPerTick;
-    if (a.asleep) { a.needs.rest = Math.max(0, a.needs.rest - 0.0025 * m * (this.works.includes("bathhouse") ? 1.3 : 1)); a.needs.hunger = Math.min(1, a.needs.hunger + 0.0004 * m); a.needs.thirst = Math.min(1, (a.needs.thirst ?? 0.3) + 0.0003 * m); return; }
-    a.needs.hunger = Math.min(1, a.needs.hunger + 0.0012 * m);
-    a.needs.rest = Math.min(1, a.needs.rest + 0.0009 * m);
+    // a sick body burns through what it has faster and tires sooner — no separate way to die of it, just a harder road through the hunger, thirst and rest it already has to answer to
+    const sick = a.illness.sick ? 1.4 : 1;
+    if (a.asleep) { a.needs.rest = Math.max(0, a.needs.rest - 0.0025 * m * (this.works.includes("bathhouse") ? 1.3 : 1)); a.needs.hunger = Math.min(1, a.needs.hunger + 0.0004 * m * sick); a.needs.thirst = Math.min(1, (a.needs.thirst ?? 0.3) + 0.0003 * m * sick); return; }
+    a.needs.hunger = Math.min(1, a.needs.hunger + 0.0012 * m * sick);
+    a.needs.rest = Math.min(1, a.needs.rest + 0.0009 * m * (a.illness.sick ? 1.6 : 1));
     a.needs.social = Math.min(1, a.needs.social + 0.0008 * m * (0.5 + a.persona.traits.warmth));
     // its own axis, same body: rises a little slower than hunger, and nothing but a drink brings it down
-    a.needs.thirst = Math.min(1, (a.needs.thirst ?? 0.3) + 0.001 * m);
+    a.needs.thirst = Math.min(1, (a.needs.thirst ?? 0.3) + 0.001 * m * sick);
     if (a.needs.hunger > 0.95 && this.rng.chance(0.002 * m)) this.remember(a, "I am very hungry and have nothing to eat.", 0.5);
   }
   private maybeWake(a: AgentState, alarm = false): void {
@@ -2363,6 +2390,59 @@ export class Town {
     this.burned += swept; // the coins went into the sea
     this.emit("town.notice", [], "harbor", `A tsunami struck ${this.name}: the sea came over the low ground, wrecking the harbour, the fields and the shore, and taking their stores. It will be ${days} days before the land is worked again — and lean until food comes by boat.`, 1, { disaster: "tsunami", places: hit.map((p) => p.id), days });
     for (const a of this.agents.values()) this.remember(a, `A tsunami struck the island — the fields and the harbour are wrecked, and there will be little to eat until food comes across the water.`, 0.95, "rumor");
+  }
+
+  /**
+   * The sickness, once a day, at day's end, from its own stream: whoever shares a place with someone sick may
+   * catch it (proximity, the same "who's together" the town already reads for conversation and for the fire
+   * bell); a sick body throws it off within the week and keeps a spell of immunity after; rarely, with nobody
+   * sick and no traveller to blame, it can simply begin. Weather for the body, not a verdict on anyone: it
+   * comes, it spreads a little, it passes. It never kills on its own — see decayNeeds and the hunger/thirst
+   * hardship loop above, which it only makes harder to answer.
+   */
+  private spreadIllness(): void {
+    const alive = [...this.agents.values()]; if (!alive.length) return;
+    // proximity: the same place-grouping the town already reads to pair conversations
+    const byPlace = new Map<string, AgentState[]>();
+    for (const a of alive) (byPlace.get(a.location) ?? byPlace.set(a.location, []).get(a.location)!).push(a);
+    for (const group of byPlace.values()) {
+      if (group.length < 2 || !group.some((x) => x.illness.sick)) continue;
+      for (const b of group) {
+        if (b.illness.sick || this.day <= b.illness.immuneUntil) continue; // already down with it, or still resisting it from last time
+        if (this.diseaseRng.chance(DISEASE_SPREAD_CHANCE)) this.fallIll(b, `caught it from someone at ${this.places.get(b.location)?.name ?? b.location}`);
+      }
+    }
+    // recovery: the body sheds it within the week regardless, sooner about a third of nights — but never the same
+    // night it was caught; a case is only eligible once it has been sick since a night that has already passed
+    for (const a of alive) {
+      if (!a.illness.sick || a.illness.since >= this.day) continue;
+      if (this.day - a.illness.since >= DISEASE_RECOVER_MAX_DAYS || this.diseaseRng.chance(DISEASE_RECOVER_CHANCE)) this.recoverFromIllness(a);
+    }
+    // rare: it can begin on its own, with nobody and nothing off the boat to blame
+    if (!alive.some((a) => a.illness.sick) && this.diseaseRng.chance(DISEASE_OUTBREAK_CHANCE)) {
+      const patient = this.diseaseRng.pick(alive);
+      this.emit("town.notice", [patient.id], patient.location, `An illness has appeared on ${this.name}: ${patient.persona.name} is the first down with it, and nobody yet knows why.`, 0.6, { disease: "outbreak" });
+      this.fallIll(patient, "was the first to fall ill, for no cause anyone can name");
+    }
+    // said once, while it holds a real share of the town; said again only once the town has thrown it off
+    const share = alive.filter((a) => a.illness.sick).length / alive.length;
+    if (share > DISEASE_STRICKEN_SHARE && !this.strickenNotified) {
+      this.strickenNotified = true;
+      this.emit("town.notice", [], undefined, `${this.name} is stricken: more than a quarter of the town is down with the illness.`, 0.75, { disease: "stricken", share: Math.round(share * 100) / 100 });
+    } else if (share === 0) this.strickenNotified = false;
+  }
+  /** One more person down with it: raises the alarm the same way weakness from hunger or thirst does, and it is a rumor the way any visible hardship is. */
+  private fallIll(a: AgentState, cause: string): void {
+    a.illness = { sick: true, since: this.day, immuneUntil: a.illness.immuneUntil };
+    this.emit("agent.weak", [a.id], a.location, `${a.persona.name} has fallen ill: ${cause}.`, 0.55, { illness: "sick" });
+    this.remember(a, "I have fallen ill. I feel weak and should rest.", 0.8);
+    for (const w of this.nearby(a)) this.remember(w, `${a.persona.name} has fallen ill.`, 0.5, "rumor");
+  }
+  /** The norm, not the exception: a body that has had it a few days throws it off and is done with it for a good while. */
+  private recoverFromIllness(a: AgentState): void {
+    a.illness = { sick: false, since: 0, immuneUntil: this.day + DISEASE_IMMUNE_DAYS };
+    this.emit("town.notice", [a.id], a.location, `${a.persona.name} has thrown off the illness and is on the mend.`, 0.4, { illness: "recovered" });
+    this.remember(a, "I have thrown off the illness. I feel myself again.", 0.6);
   }
   /** How many roads between two places. One walk of the roads per origin per minute; habit asks for every hungry person and every seller. */
   hops(from: string, to: string): number | null { if (from === to) return 0; return this.distances(from).get(to) ?? null; }
