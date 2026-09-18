@@ -35,6 +35,8 @@ export interface Place {
   stock: Record<string, number>;
   /** The day a broken place works again, if a storm took its roof. */
   brokenUntil?: number;
+  /** The day a union's strike here lifts. While it stands, a striking worker's shift withholds labor: no wage goes out and nothing is produced, without costing them the job as a no-show would. */
+  strikeUntil?: number;
   institution?: {name:string;charter:string;founder:string;members:string[];founded:number};
   /** An unfinished building on a plot. Work adds labor; at laborNeeded it becomes a place. */
   site: { what: "house" | "shop" | "garden"; name: string; by: AgentId; labor: number; laborNeeded: number; startedDay: number; look?: string; project?: string; workedDay?: Record<AgentId, number> } | null;
@@ -103,6 +105,25 @@ export interface Budget {
 
 export interface OwnerLetter { id: number; text: string; t: number; read: boolean; /** set once the citizen has written back to this letter; one answer per letter */ answered?: boolean }
 
+/**
+ * A claim about someone, as one particular person holds it: not the flavor-text `rumors` an LLM
+ * conversation may pass along, but the structured, engine-driven gossip a name's trouble sets moving.
+ * Passes person to person at a shared place, mutating a little each hop, and rides the boat with
+ * whoever carries it — see `Town.passengerOf`/`arrive`. Decays and is dropped once too faint to matter.
+ */
+export interface Rumor {
+  id: number;
+  /** who the claim is about */
+  about: AgentId;
+  claim: string;
+  /** 0..1: how strong/credible this copy is. Drives how hard it nudges a hearer's trust in the subject, and whether it is strong enough for the paper. */
+  strength: number;
+  /** the day this copy was last heard or refreshed */
+  heard: number;
+  /** how many mouths it has passed through since it began; each hop drifts the claim and weakens it a little */
+  hops: number;
+}
+
 export interface AgentState {
   itemInstances?: import("@unwatched/protocol").ItemInstance[];
   nextItemId?: number;
@@ -146,6 +167,8 @@ export interface AgentState {
   activity?: { kind: "fish" | "work"; place: string; started: number; until: number } | null;
   lastFishingDay?: number;
   rumors: string[];
+  /** Structured, engine-driven gossip this person currently holds: what they have heard, about whom, and how strongly. See `Rumor`. */
+  gossip: Rumor[];
   appearance: Record<string, unknown> | null;
   /** Read every morning. Advice, not orders. */
   instructions: string;
@@ -332,6 +355,7 @@ export interface AgentSnapshot {
     intelligence?: number; education?: number;
     needs: AgentState["needs"]; location: PlaceId; coins: number; inventory: string[]; job: string | null;
     home: AgentState["home"]; asleep: boolean; budget: Budget; intentions: string[]; rumors: string[];
+    gossip?: Rumor[];
     foodAdvice?: import("./learning.ts").FoodAdvice[];
   foodLessons?: import("./learning.ts").FoodLesson[];
   foodRoutineDecisions?: import("./learning.ts").FoodRoutineDecision[];
@@ -378,5 +402,10 @@ export interface TownSnapshot {
   laws: { text: string; by: AgentId; yes: number; no: number; open: boolean; voters?: AgentId[] }[];
   children?: Child[];
   /** The institutions: who is mayor, since when, and what the council has built. */
-  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture };
+  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture; factions?: import("./factions.ts").Faction[];
+    /** Trade: goods this island makes none of itself and has gone without off the boat long enough that the shelves show it (empty or scraping the bottom) — set at the last day's end, cleared once the boat brings more; and, for each traded good, the island last seen sending it. */
+    trade?: { shortages?: string[]; partners?: Record<string, string> };
+  };
+  /** A stranger a nudge sent for, still on the water. Kept across a restore so a scheduled arrival isn't lost to a restart. */
+  pendingStrangers?: { atT: number; persona: Persona; coins: number; owner: string | null }[];
 }

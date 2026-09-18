@@ -419,12 +419,14 @@ app.post("/api/boat/arrive", async (c) => {
 // the boat office tells the web which sign-in it expects, so a build without the public keys can say so instead of failing at the last step
 app.get("/api/office", (c) => c.json({ signIn: sb && process.env.UW_DEV_OWNER !== "1" ? "supabase" : "dev" }));
 app.route("/api/construction", constructionRoutes(town, TOWN_NAME));
-app.get("/api/town", (c) => c.json({ ...clockOf(town), name: TOWN_NAME, id: TOWN_ID, size: town.pack.size, places: [...town.places.values()].map(placeView), laws: town.laws, children: town.children.map(childView) }));
+// what an owner reads of the island's trade: what it is built to sell, what it cannot make for itself, who it last got each import from, and any staple currently running dry off the boat
+const tradeView = () => ({ exports: town.specialties(), imports: town.tradeDependentItems(), partners: town.tradePartners, shortages: [...town.tradeShortages] });
+app.get("/api/town", (c) => c.json({ ...clockOf(town), name: TOWN_NAME, id: TOWN_ID, size: town.pack.size, places: [...town.places.values()].map(placeView), laws: town.laws, children: town.children.map(childView), trade: tradeView() }));
 /**
  * A compact self-descriptor for an optional coordinator hub (and for a spectator island-picker). The hub seam:
  * an island advertises who it is and who it boats to; it never depends on a hub to run. See docs/hub-design.md.
  */
-app.get("/api/island", (c) => c.json({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, size: PACK.size, day: town.day, weather: town.weather, population: town.agents.size, harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }));
+app.get("/api/island", (c) => c.json({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, size: PACK.size, day: town.day, weather: town.weather, population: town.agents.size, distress: town.distressed, trade: tradeView(), harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }));
 /** Children of the island who could be adopted: unowned, growing up or already grown. Adopting means writing to them; nothing more. */
 app.get("/api/children", (c) => c.json({
   growing: town.children.filter((ch) => !ch.adoptedBy).map(childView),
@@ -722,6 +724,30 @@ app.post("/api/ops/npc-population",async c=>{
   return c.json({moved:plan.selected.length,remaining:plan.remaining});
  }finally{worldTransition=false;}
 });
+// ---- the reader's lever: an operator can nudge the world, never command it ----
+const NudgeBody = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("rumor"), text: z.string().min(1).max(280), agentIds: z.array(z.string()).max(20).optional() }),
+  z.object({ kind: z.literal("stranger"), persona: Persona, coins: z.number().optional(), owner: z.string().nullable().optional(), delayMinutes: z.number().int().min(0).optional() }),
+  z.object({ kind: z.literal("windfall"), agentId: z.string(), amount: z.number() }),
+  z.object({ kind: z.literal("whisper"), agentId: z.string(), text: z.string().min(1).max(600) }),
+]);
+app.post("/api/ops/nudge", async (c) => {
+  const body = NudgeBody.safeParse(await c.req.json().catch(() => null));
+  if (!body.success) return c.json({ error: "not a nudge the island recognizes" }, 400);
+  const data = body.data;
+  // optional fields are spread in only when present: an object literal with an explicit `key: undefined`
+  // trips up overload resolution against `nudge`'s other, differently-shaped overloads
+  let result: { ok: boolean; reason?: string };
+  switch (data.kind) {
+    case "rumor": result = town.nudge("rumor", { text: data.text, ...(data.agentIds ? { agentIds: data.agentIds } : {}) }); break;
+    case "stranger": result = town.nudge("stranger", { persona: data.persona, ...(data.coins !== undefined ? { coins: data.coins } : {}), ...(data.owner !== undefined ? { owner: data.owner } : {}), ...(data.delayMinutes !== undefined ? { delayMinutes: data.delayMinutes } : {}) }); break;
+    case "windfall": result = town.nudge("windfall", { agentId: data.agentId, amount: data.amount }); break;
+    case "whisper": result = town.nudge("whisper", { agentId: data.agentId, text: data.text }); break;
+  }
+  if (!result.ok) return c.json({ error: result.reason ?? "that nudge was refused" }, 409);
+  if (store) await store.snapshot(town).catch((err: Error) => log(`nudge snapshot failed: ${err.message}`));
+  return c.json({ ok: true });
+});
 app.get("/api/ops", async (c) => {
   c.header("Cache-Control","private, no-store");
   if (!(await opsOk(c.req.raw))) return c.json({ error: "Administrator sign-in required." }, 401);
@@ -891,7 +917,7 @@ async function hubPost(path: string, body: unknown): Promise<void> {
 }
 // identity + topology (rarely changes); live state (day/weather/economy) for the overview map
 const registerWithHub = () => hubPost("/islands", { id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: ISLAND_URL, size: PACK.size, harbors: HARBORS.map((h) => ({ id: h.id, url: h.url })) });
-const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, distress: town.distressed, mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
+const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, distress: town.distressed, tradeShortages: [...town.tradeShortages], mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
 if (HUB_URL) {
   log(`registering with hub at ${HUB_URL}`);
   void registerWithHub().then(reportState);
