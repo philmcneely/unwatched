@@ -319,6 +319,18 @@ export function validate(a: AgentState, action: Action, v: ValidatorView): Verdi
       if (b.id === a.id) return { ok: false, reason: "cannot accuse oneself" };
       return { ok: true };
     }
+    case "harm": {
+      const b = v.agents.get(action.who) ?? [...v.agents.values()].find((x) => x.persona.name.toLowerCase() === action.who.toLowerCase());
+      if (!b) return { ok: false, reason: "nobody by that name on the island" };
+      if (b.id === a.id) return { ok: false, reason: "cannot harm oneself" };
+      if (b.location !== a.location) return { ok: false, reason: "not here" };
+      return { ok: true };
+    }
+    case "sabotage": {
+      if (here.kind !== "workplace" && here.kind !== "shop") return { ok: false, reason: "nothing here worth sabotaging" };
+      if (here.brokenUntil && here.brokenUntil > (v.day ?? 0)) return { ok: false, reason: `${here.name} is already broken` };
+      return { ok: true };
+    }
     case "leave": {
       if (here.kind !== "harbor") return { ok: false, reason: "the boat leaves from the harbor" };
       if (v.hour < 6 || v.hour > 20) return { ok: false, reason: "no boat at this hour" };
