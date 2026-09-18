@@ -35,6 +35,8 @@ export interface Place {
   stock: Record<string, number>;
   /** The day a broken place works again, if a storm took its roof. */
   brokenUntil?: number;
+  /** The day a union's strike here lifts. While it stands, a striking worker's shift withholds labor: no wage goes out and nothing is produced, without costing them the job as a no-show would. */
+  strikeUntil?: number;
   institution?: {name:string;charter:string;founder:string;members:string[];founded:number};
   /** An unfinished building on a plot. Work adds labor; at laborNeeded it becomes a place. */
   site: { what: "house" | "shop" | "garden"; name: string; by: AgentId; labor: number; laborNeeded: number; startedDay: number; look?: string; project?: string; workedDay?: Record<AgentId, number> } | null;
@@ -400,7 +402,7 @@ export interface TownSnapshot {
   laws: { text: string; by: AgentId; yes: number; no: number; open: boolean; voters?: AgentId[] }[];
   children?: Child[];
   /** The institutions: who is mayor, since when, and what the council has built. */
-  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture };
+  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture; factions?: import("./factions.ts").Faction[] };
   /** A stranger a nudge sent for, still on the water. Kept across a restore so a scheduled arrival isn't lost to a restart. */
   pendingStrangers?: { atT: number; persona: Persona; coins: number; owner: string | null }[];
 }

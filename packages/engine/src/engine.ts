@@ -2,6 +2,7 @@ import { syncItems, syncShelf, bagView, capacity, equipped, wearTool, newItem, n
 import { coastalWonder } from "@unwatched/protocol";
 import { desiresForMind, desireEvidence, reviseDesires, recordDesireAttempt } from "./desires.ts";
 import { recordEvolution, type EvolutionStory } from "./evolution.ts";
+import { readCohesion, driftCohesion, minMembers, type Faction } from "./factions.ts";
 import { skillId, achieved, importedSkill, type SkillMeasure } from "./skills.ts";
 import { recordPurchase, foodExperience, teachable, ADVICE_LIFETIME } from "./learning.ts";
 import { recordBuildingMoment } from "./building-history.ts";
@@ -190,6 +191,8 @@ export class Town {
   /** Laws with teeth, and the words the island keeps. */
   evolution: EvolutionStory[] = [];
   rules: Rule[] = []; sayings: { text: string; by: AgentId[] }[] = [];
+  /** Unions, guilds, parties, faiths: bodies that emerged from shared circumstance and can act together. Recomputed a little each night in `updateFactions`; they press, they never dictate. */
+  factions: Faction[] = [];
   /** What the island has become, from what it has actually lived through. Nudged once a night, in `updateCulture`; never rolled, never set by hand. */
   culture: TownCulture = { values: { industrious: 0.3, communal: 0.3, mercantile: 0.3, resilient: 0.3, devout: 0.3 }, lean: null, signature: null, trade: {}, notable: null, wealth: 0, descriptor: "an island still finding what it is", updatedDay: 0 };
   /** The chain of seals: one per day, each hashing the day's events and the seal before it. Nothing is invented, and this is how anyone can check. */
@@ -236,6 +239,7 @@ export class Town {
   private pendingStrangers: { atT: number; persona: Persona; coins: number; owner: string | null }[] = [];
   private rumorRng!: Rng; // gossip draws from its own stream too, for the same reason
   private nextRumorId = 1;
+  private factionRng!: Rng; // whether an owner concedes to a strike draws from its own stream too, for the same reason
   /** Set once an outbreak has been announced to the town, so the notice does not repeat every night it stays severe; clears once the town is clear of it again. Not persisted — at worst the record re-announces once after a restart. */
   private strickenNotified = false;
   private nextId = 1;
@@ -268,6 +272,7 @@ export class Town {
     this.landRng = new Rng((opts.seed ?? 42) + 220462);
     this.diseaseRng = new Rng((opts.seed ?? 42) + 314159);
     this.rumorRng = new Rng((opts.seed ?? 42) + 271828);
+    this.factionRng = new Rng((opts.seed ?? 42) + 675309);
     this.brain = opts.brain;
     this.minutesPerTick = opts.minutesPerTick ?? 1;
     this.day = opts.startDay ?? 1;
@@ -362,7 +367,7 @@ export class Town {
     // what people built, over the map the code lays out: the code owns positions and roads, the record owns everything else
     for (const sp of snap.places ?? []) {
       const p = this.places.get(sp.id);
-      if (p) { if(sp.decorations)p.decorations=structuredClone(sp.decorations);else delete p.decorations; if(sp.institution)p.institution=structuredClone(sp.institution);else delete p.institution; if (sp.community) p.community = structuredClone(sp.community); else delete p.community; if (sp.history) p.history = structuredClone(sp.history); else delete p.history; p.name = sp.name; p.kind = sp.kind; p.sells = sp.sells; p.owner = sp.owner ?? null; p.site = structuredClone(sp.site ?? null); p.treasury = sp.treasury ?? p.treasury; if (sp.stock) p.stock = { ...sp.stock }; if (sp.look) p.look = sp.look; else delete p.look; if (sp.brokenUntil) p.brokenUntil = sp.brokenUntil; if (sp.beds) p.beds = sp.beds; else delete p.beds; if (sp.sprite) p.sprite = sp.sprite; if (sp.water) p.water = structuredClone(sp.water); else delete p.water; if (sp.landUse) p.landUse = sp.landUse; else delete p.landUse; }
+      if (p) { if(sp.decorations)p.decorations=structuredClone(sp.decorations);else delete p.decorations; if(sp.institution)p.institution=structuredClone(sp.institution);else delete p.institution; if (sp.community) p.community = structuredClone(sp.community); else delete p.community; if (sp.history) p.history = structuredClone(sp.history); else delete p.history; p.name = sp.name; p.kind = sp.kind; p.sells = sp.sells; p.owner = sp.owner ?? null; p.site = structuredClone(sp.site ?? null); p.treasury = sp.treasury ?? p.treasury; if (sp.stock) p.stock = { ...sp.stock }; if (sp.look) p.look = sp.look; else delete p.look; if (sp.brokenUntil) p.brokenUntil = sp.brokenUntil; if (sp.strikeUntil) p.strikeUntil = sp.strikeUntil; else delete p.strikeUntil; if (sp.beds) p.beds = sp.beds; else delete p.beds; if (sp.sprite) p.sprite = sp.sprite; if (sp.water) p.water = structuredClone(sp.water); else delete p.water; if (sp.landUse) p.landUse = sp.landUse; else delete p.landUse; }
     }
     for (const p of this.places.values()) stockShelf(this.pack, p); // a record from before shelves were counted gets its counts now
     for (const sj of snap.jobs ?? []) if (!this.jobs.has(sj.id) && this.places.has(sj.place)) this.jobs.set(sj.id, { ...sj, holders: [] });
@@ -394,6 +399,10 @@ export class Town {
     this.children.splice(0, this.children.length, ...(snap.children ?? []));
     this.evolution=structuredClone(snap.civic?.evolution??[]);
     if (snap.civic) { this.mayor = snap.civic.mayor && this.agents.has(snap.civic.mayor) ? snap.civic.mayor : null; this.electedDay = snap.civic.elected; this.works = [...snap.civic.works]; this.gatherings = (snap.civic.gatherings ?? []).map((g) => ({ ...g })); this.wedded = new Set(snap.civic.wedded ?? []); this.chain = [...(snap.civic.chain ?? [])]; this.rules = [...(snap.civic.rules ?? [])]; this.sayings = [...(snap.civic.sayings ?? [])]; this.nextGatheringId = 1 + Math.max(0, ...this.gatherings.map((g) => g.id)); this.culture = snap.civic.culture ? structuredClone(snap.civic.culture) : this.culture; }
+    // factions: kept only where at least one member is still here; a body nobody belongs to any more is not a body
+    this.factions = structuredClone(snap.civic?.factions ?? [])
+      .map((f) => ({ ...f, members: f.members.filter((id) => this.agents.has(id)) }))
+      .filter((f) => f.members.length > 0);
     this.nextLetterId = 1 + Math.max(0, ...[...this.agents.values()].flatMap((a) => a.letters.map((l) => l.id)));
     this.nextDealId = Math.max(snap.civic?.nextDealId ?? 1, 1 + Math.max(0, ...[...this.agents.values()].flatMap((a) => a.deals.map((d) => d.id))));
     this.pendingStrangers = structuredClone(snap.pendingStrangers ?? []);
@@ -412,7 +421,7 @@ export class Town {
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
-      papers: this.papers.slice(-14), laws: this.laws, children: this.children.map((c) => ({ ...c })), civic: { evolution: structuredClone(this.evolution), nextDealId: this.nextDealId, mayor: this.mayor, elected: this.electedDay, works: [...this.works], gatherings: this.gatherings.filter((g) => !g.held).map((g) => ({ ...g })), wedded: [...this.wedded], chain: this.chain.slice(-400), rules: [...this.rules], sayings: this.sayings.slice(-40), culture: structuredClone(this.culture) },
+      papers: this.papers.slice(-14), laws: this.laws, children: this.children.map((c) => ({ ...c })), civic: { evolution: structuredClone(this.evolution), nextDealId: this.nextDealId, mayor: this.mayor, elected: this.electedDay, works: [...this.works], gatherings: this.gatherings.filter((g) => !g.held).map((g) => ({ ...g })), wedded: [...this.wedded], chain: this.chain.slice(-400), rules: [...this.rules], sayings: this.sayings.slice(-40), culture: structuredClone(this.culture), factions: structuredClone(this.factions) },
       pendingStrangers: structuredClone(this.pendingStrangers),
     };
   }
@@ -427,6 +436,8 @@ export class Town {
     if (a.job) { const j = this.jobs.get(a.job); if (j) j.holders = j.holders.filter((h) => h !== a.id); }
     if (a.asleep) { const p = this.places.get(a.location); if (p?.beds) p.freeBeds = Math.min(p.beds.capacity, (p.freeBeds ?? 0) + 1); }
     for(const p of this.places.values())if(p.institution)p.institution.members=p.institution.members.filter(id=>id!==agentId);
+    for (const f of this.factions) f.members = f.members.filter((id) => id !== agentId);
+    this.factions = this.factions.filter((f) => f.members.length > 0);
     this.agents.delete(agentId);
     if (this.mayor === agentId) { this.mayor = null; this.emit("town.mayor", [], "council", `${a.persona.name} is gone; the island has no mayor until the council sits again.`, 0.6); }
     if (reason === "died") { this.inherit(a); if (this.places.has("chapel")) this.gather("funeral", "chapel", this.day + 1, 10, [agentId], a.persona.name); }
@@ -1366,6 +1377,7 @@ export class Town {
       if (h === job.hours[1]) for (const id of job.holders) {
         const a = this.agents.get(id); if (!a) continue;
         const place = this.places.get(job.place)!; const owner = place.owner ? this.agents.get(place.owner) : null;
+        if (place.strikeUntil && place.strikeUntil > this.day) { a.workedToday = false; continue; } // the union's own: labor withheld, no wage out, no shift missed against them
         if (owner && owner.id === id) { a.workedToday = false; continue; } // their own counter: the takings are already theirs, and no wage is owed
         // produce goes out on the evening boat: the mainland pays the workplace a little more than the shift cost
         // a place that makes nothing the boat can carry (the harbor, the chandlery) still earns the mainland's coin for a day's handling
@@ -1573,6 +1585,8 @@ export class Town {
     const bakery = this.places.get("bakery"); const short = !!bakery && (bakery.stock.flour ?? 0) <= 0 && (bakery.stock.bread ?? 0) <= 0;
     if (short && !this.flourShortage) { this.flourShortage = true; this.emit("economy.price", [], "bakery", "The bakery has no flour and no bread. What bread there is costs double.", 0.6); }
     else if (!short && this.flourShortage) { this.flourShortage = false; this.emit("economy.price", [], "bakery", "Flour is back at the bakery. Bread is a coin again.", 0.4); }
+    // unions, guilds, parties, faiths: who the day's real circumstance actually binds together, and whether that is now enough to press on the town
+    this.updateFactions();
     this.arrivalsToday = 0; this.departuresToday = 0;
   }
 
@@ -2836,6 +2850,101 @@ export class Town {
       this.culture.descriptor = this.culture.lean ? `an island grown ${leanWord[this.culture.lean]}${this.culture.signature ? `, known for its ${this.culture.signature}` : ""}${who ? `, and for ${who}` : ""}` : "an island still finding what it is";
       this.culture.updatedDay = this.day;
       this.emit("town.notice", this.culture.notable ? [this.culture.notable] : [], undefined, `The island has become ${this.culture.descriptor}.`, 0.4, { lean: this.culture.lean, signature: this.culture.signature, notable: this.culture.notable });
+    }
+  }
+  /** Unions, guilds, parties, faiths: recomputed a little each night from what the town's own state actually shows
+   * — never hardcoded, never rolled for who belongs. Formed from real shared circumstance (the same job, the same
+   * trade, the same open cause, the same graveside and table); each can press with a collective action once its
+   * cohesion has grown enough and its cooldown has passed, but the pressure never decides the outcome for the town
+   * — an owner may concede a strike or hold firm, a council still elects on trust, a crowd still has to come. */
+  private updateFactions(): void {
+    const trustBetween = (x: AgentId, y: AgentId) => this.agents.get(x)?.relationships.get(y)?.trust ?? 0.3;
+    const seen = new Set<string>();
+    const found = (kind: Faction["kind"], basis: string, name: string, members: AgentId[]): void => {
+      if (members.length < minMembers(kind)) return;
+      const id = `${kind}:${basis}`.slice(0, 96);
+      seen.add(id);
+      let f = this.factions.find((x) => x.id === id);
+      if (!f) {
+        f = { id, kind, name, basis, members: [...members], founded: this.day, cohesion: readCohesion(members, trustBetween), lastActionDay: null };
+        this.factions.push(f);
+        this.emit("town.notice", [...members], undefined, `${name} has come together, ${members.length} of one mind for now.`, 0.5, { faction: f.id, kind: f.kind, formed: true });
+        for (const mid of members) { const m = this.agents.get(mid); if (m) this.remember(m, `${name} has come together, and I am one of it.`, 0.55); }
+      } else {
+        f.name = name; f.members = [...members];
+        f.cohesion = driftCohesion(f.cohesion, readCohesion(f.members, trustBetween));
+      }
+    };
+
+    // a union: whoever shares a job shares a workplace and a wage, and that is grievance enough to organize around
+    for (const job of this.jobs.values()) {
+      const place = this.places.get(job.place); if (!place) continue;
+      found("union", job.id, `${place.name} Workers' Union`, [...job.holders]);
+    }
+    // the merchants' guild: whoever owns a place that sells something is in the same trade, whatever it sells
+    const merchants = [...new Set([...this.places.values()].filter((p) => p.owner && p.sells.length > 0).map((p) => p.owner!))];
+    found("guild", "trade", "the Merchants' Guild", merchants);
+    // a party: whoever has bothered to vote, for or against, on the same still-open proposal is engaged in the same cause; the party goes when the vote closes
+    for (const law of this.laws) {
+      if (!law.open) continue;
+      found("party", `${law.by}:${law.text.slice(0, 40)}`, `Backers of "${law.text.slice(0, 40)}${law.text.length > 40 ? "…" : ""}"`, [...(law.voters ?? [law.by])]);
+    }
+    // a faith: whoever the record shows keeps turning up to the same graveside, altar or table, while the island itself leans devout
+    if (this.culture.values.devout >= 0.35) {
+      const lookback = MINUTES_PER_DAY * 20;
+      const gathering = [...this.events].reverse().find((e) => e.kind === "town.gathering" && this.t - e.t <= lookback && ["wedding", "funeral", "feast"].includes((e.payload as { kind?: string } | undefined)?.kind ?? "") && (e.payload as { held?: boolean } | undefined)?.held);
+      const congregation = gathering ? ((gathering.payload as { crowd?: AgentId[] } | undefined)?.crowd ?? []).filter((id) => this.agents.has(id)) : [];
+      found("faith", "devout", "the Faithful", congregation);
+    }
+
+    // gone the moment its circumstance is: a body kept alive only by yesterday's headcount is not a faction any more
+    this.factions = this.factions.filter((f) => seen.has(f.id));
+
+    // collective action: pressure, never a forced outcome — clamped, cheap, and cooled down so it does not fire every night it could
+    for (const f of this.factions) {
+      const cooldown = f.kind === "faith" ? 20 : f.kind === "union" ? 5 : 6;
+      if (f.lastActionDay !== null && this.day - f.lastActionDay < cooldown) continue;
+      if (f.kind === "union" && f.cohesion >= 0.55) {
+        const job = this.jobs.get(f.basis); if (!job) continue;
+        const place = this.places.get(job.place); if (!place || (place.strikeUntil && place.strikeUntil > this.day)) continue;
+        const hardship = f.members.some((id) => { const m = this.agents.get(id); return !!m && (m.starving >= 1 || m.roofless >= 1); });
+        if (!hardship) continue;
+        place.strikeUntil = this.day + 1; f.lastActionDay = this.day;
+        const owner = place.owner ? this.agents.get(place.owner) : null;
+        const purse = owner ? owner.coins : place.treasury;
+        const concede = job.wage < 12 && purse >= job.wage * 4 && this.factionRng.chance(0.5);
+        if (concede) job.wage += 1;
+        this.emit("town.notice", [...f.members, ...(owner ? [owner.id] : [])], place.id, `${f.name} struck: no shift goes out at ${place.name} today.${concede ? ` ${owner ? owner.persona.name : "the till"} gave ground: the wage is ${job.wage} now.` : ` ${owner ? owner.persona.name : "the till"} held firm.`}`, 0.8, { faction: f.id, action: "strike", conceded: concede, wage: job.wage });
+        for (const id of f.members) { const m = this.agents.get(id); if (m) this.remember(m, `We of ${f.name} struck at ${place.name} today.${concede ? " It worked." : " Nothing gave, yet."}`, 0.75); }
+        if (owner) this.remember(owner, `The ${f.name} struck at ${place.name}.${concede ? ` I raised the wage to ${job.wage} to get them back.` : " I held the wage where it was."}`, 0.8);
+      } else if (f.kind === "guild" && f.cohesion >= 0.5) {
+        const shops = f.members.map((id) => [...this.places.values()].find((p) => p.owner === id && p.sells.length > 0)).filter((p): p is Place => !!p);
+        const counts = new Map<string, number>();
+        for (const p of shops) for (const s of p.sells) counts.set(s.item, (counts.get(s.item) ?? 0) + 1);
+        const item = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]; if (!item) continue;
+        let changed = false;
+        for (const p of shops) { const line = p.sells.find((s) => s.item === item); if (line && line.base < 6) { line.base += 1; changed = true; } }
+        if (!changed) continue;
+        f.lastActionDay = this.day;
+        this.emit("economy.price", [...f.members], undefined, `${f.name} set ${item} alike across its shops, a coin dearer, in one voice.`, 0.55, { faction: f.id, action: "boycott", item });
+        for (const id of f.members) { const m = this.agents.get(id); if (m) this.remember(m, `We of ${f.name} agreed: ${item} costs a coin more, everywhere we sell it.`, 0.5); }
+      } else if (f.kind === "party" && f.cohesion >= 0.5) {
+        let candidate: AgentId | null = null, best = -1;
+        for (const id of f.members) { let s = 0, n = 0; for (const other of f.members) if (other !== id) { s += trustBetween(other, id); n++; } const avg = n ? s / n : 0; if (avg > best) { best = avg; candidate = id; } }
+        if (!candidate) continue;
+        for (const id of f.members) if (id !== candidate) { const m = this.agents.get(id); if (m) this.trustNudge(m, candidate, 0.05, 0.02); }
+        f.lastActionDay = this.day;
+        const cName = this.agents.get(candidate)?.persona.name ?? candidate;
+        this.emit("town.notice", [...f.members], undefined, `${f.name} rallied behind ${cName} for the council.`, 0.6, { faction: f.id, action: "back", candidate });
+        for (const id of f.members) { const m = this.agents.get(id); if (m) this.remember(m, `${f.name} rallied behind ${cName}.`, 0.55); }
+      } else if (f.kind === "faith" && f.cohesion >= 0.5) {
+        if (this.gatherings.some((g) => g.kind === "feast" && g.day === this.day + 1)) continue;
+        const place = this.places.get("chapel") ?? this.places.get("market") ?? [...this.places.values()][0]; if (!place) continue;
+        this.gather("feast", place.id, this.day + 1, 13, [...f.members], `${f.name} rallied a feast`);
+        f.lastActionDay = this.day;
+        this.emit("town.notice", [...f.members], place.id, `${f.name} called a feast at ${place.name} for tomorrow.`, 0.6, { faction: f.id, action: "rally" });
+        for (const id of f.members) { const m = this.agents.get(id); if (m) this.remember(m, `${f.name} is calling a feast at ${place.name} tomorrow.`, 0.5); }
+      }
     }
   }
   /** The two places farthest apart by the roads, for the bridge. */
