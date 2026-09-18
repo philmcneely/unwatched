@@ -267,7 +267,7 @@ export class Town {
       education: o.education ?? EDU_STARTING,
       skills: [], practice: null, relationships: new Map(), memory: [], foodAdvice: [], foodLessons: [], foodRoutineDecisions: [],
       budget: { tier1Max: 50, tier2Max: 5, tier1Left: 50, tier2Left: 5, ...o.budget },
-      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, magnate: o.magnate ?? false, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [],
+      plan: null, lastPlan: null, debts: [], deals: [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: 0, roofless: 0, parched: 0, savings: 0, debt: 0, debtPrincipal: 0, magnate: o.magnate ?? false, convictions: 0, notoriety: 0, fugitive: false, secretsKnown: {}, seek: null, watch: [], selves: [], lastSelfDay: 0, doToday: 0, projects: [], beliefs: [], parents: null,
       funded: o.funded ?? true, owner: o.owner ?? null, letters: [], intentions: [],
       lastConversation: -999, lastThought: -999, heard: [], workedToday: false, rumors: [], appearance: null, instructions: "", brainKind: "hosted", thinkEvery: null,
       seenToday: [], trustDawn: {}, trustLog: [], lastHungerThought: -999, starvingThoughtDay: 0, debtThoughtDay: 0, gatheringThoughtId: null, replyTo: null,
@@ -308,7 +308,7 @@ export class Town {
         memory: [...sa.memory].sort((x, y) => x.t - y.t),
         budget: { ...sa.state.budget }, funded: sa.funded, owner: sa.owner, letters: sa.state.letters ?? [], intentions: [...sa.state.intentions],
         itemInstances: structuredClone(sa.state.itemInstances ?? []), nextItemId: sa.state.nextItemId ?? 0, equippedItem: sa.state.equippedItem ?? null, storage: structuredClone(sa.state.storage ?? []), activity: sa.state.activity ?? null, lastFishingDay: sa.state.lastFishingDay ?? -1, deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, magnate: sa.state.magnate ?? false, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
-        seenToday: [], trustDawn: Object.fromEntries(sa.relationships.map((r) => [r.other, r.trust])), trustLog: [...(sa.state.trustLog ?? [])], lastHungerThought: sa.state.lastHungerThought ?? -999, starvingThoughtDay: sa.state.starvingThoughtDay ?? 0, debtThoughtDay: sa.state.debtThoughtDay ?? 0, gatheringThoughtId: sa.state.gatheringThoughtId ?? null, replyTo: sa.state.replyTo ?? null,
+        seenToday: [], trustDawn: Object.fromEntries(sa.relationships.map((r) => [r.other, r.trust])), trustLog: [...(sa.state.trustLog ?? [])], lastHungerThought: sa.state.lastHungerThought ?? -999, starvingThoughtDay: sa.state.starvingThoughtDay ?? 0, debtThoughtDay: sa.state.debtThoughtDay ?? 0, gatheringThoughtId: sa.state.gatheringThoughtId ?? null, replyTo: sa.state.replyTo ?? null, parents: sa.state.parents ?? null,
       };
       this.agents.set(a.id, a);
       if (a.job) this.jobs.get(a.job)!.holders.push(a.id);
@@ -334,7 +334,7 @@ export class Town {
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
         id: a.id, persona: a.persona, owner: a.owner, funded: a.funded, appearance: a.appearance, arrivedAt: a.arrivedAt,
-        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60) },
+        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60), parents: a.parents ?? null },
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
@@ -1839,24 +1839,35 @@ export class Town {
     for (const b of this.agents.values()) if (b.id !== a.id && b.home?.place === a.home.place) return b;
     return null;
   }
-  /** What the dead leave: coins and places to the partner, else to a grown child, else the house stands empty and the coins go to the council. */
+  /** What the dead leave, as a real consequence and not a script: coins, savings and any owned places pass to the partner if there is one, else split evenly among any grown children still living, remainder to the eldest of them; whoever inherits takes on the outstanding bank debt too, split the same way — a widow or child can inherit a burden along with a house. No heir at all, and the place stands empty for the next owner while the coins escheat to the council; savings and debt with no heir simply go unclaimed (nothing minted for the council, nothing seized from the bank). Every coin that moves is a transfer between purses already on the books, never conjured or destroyed. */
   private inherit(a: AgentState): void {
-    const partner = this.partnerOf(a) ?? null;
-    const names = new Set(this.children.filter((c) => c.parents.includes(a.id)).map((c) => c.name));
-    const grown = [...this.agents.values()].find((x) => x.persona.origin.startsWith("born on the island") && x.memory.some((m) => m.text.includes(`to ${a.persona.name}`) || m.text.includes(`${a.persona.name} and`)) && !names.has(x.persona.name)) ?? null;
-    const heir = partner ?? grown;
+    const partner = this.partnerOf(a);
+    const children = [...this.agents.values()].filter((x) => x.id !== a.id && x.parents?.includes(a.id));
+    const heirs = partner ? [partner] : children;
     const owned = [...this.places.values()].filter((p) => p.owner === a.id);
-    for (const b of this.agents.values()) b.debts = b.debts.filter((d) => d.to !== a.id); // debts to the dead are forgiven
-    if (heir) {
-      heir.coins += a.coins; for (const p of owned) p.owner = heir.id; if (owned.length && !heir.home) heir.home = { place: owned[0]!.id, nightsPaid: 36500 };
-      this.emit("agent.inherit", [heir.id, a.id], heir.location, `${heir.persona.name} inherited ${a.coins} coins${owned.length ? ` and ${owned.map((p) => p.name).join(", ")}` : ""} from ${a.persona.name}.`, 0.7);
-      this.remember(heir, `${a.persona.name} is dead. What was theirs is mine now: ${a.coins} coins${owned.length ? ` and ${owned.map((p) => p.name).join(", ")}` : ""}.`, 0.95);
+    for (const b of this.agents.values()) b.debts = b.debts.filter((d) => d.to !== a.id); // debts owed to the dead are forgiven
+    const debtBefore = a.debt;
+    if (heirs.length) {
+      const n = heirs.length;
+      const split = (total: number) => { const share = Math.floor(total / n); const remainder = total - share * n; return heirs.map((_, i) => share + (i === 0 ? remainder : 0)); };
+      const coinShares = split(a.coins), savingsShares = split(a.savings), debtShares = split(a.debt), principalShares = split(a.debtPrincipal);
+      heirs.forEach((heir, i) => {
+        heir.coins += coinShares[i]!; heir.savings = (heir.savings ?? 0) + savingsShares[i]!;
+        heir.debt = (heir.debt ?? 0) + debtShares[i]!; heir.debtPrincipal = (heir.debtPrincipal ?? 0) + principalShares[i]!;
+      });
+      const first = heirs[0]!;
+      for (const p of owned) p.owner = first.id;
+      if (owned.length && !first.home) first.home = { place: owned[0]!.id, nightsPaid: 36500 };
+      const names = heirs.map((h) => h.persona.name).join(" and ");
+      const debtNote = debtBefore > 0 ? ` The debt of ${debtBefore} coins came with it.` : "";
+      this.emit("agent.inherit", [first.id, a.id], first.location, `${names} inherited ${a.coins} coins${owned.length ? ` and ${owned.map((p) => p.name).join(", ")}` : ""} from ${a.persona.name}.${debtNote}`, 0.7);
+      heirs.forEach((heir, i) => this.remember(heir, `${a.persona.name} is dead. What was theirs is mine now: ${coinShares[i]}${n > 1 ? " of the estate's" : ""} coins${owned.length && heir === first ? ` and ${owned.map((p) => p.name).join(", ")}` : ""}.${debtShares[i] ? ` The debt came with it.` : ""}`, 0.95));
     } else {
       const council = this.places.get("council"); if (council) council.treasury += a.coins;
       for (const p of owned) { p.owner = null; if (p.beds) p.beds.price = 2; }
       if (a.coins > 0 || owned.length) this.emit("agent.inherit", [a.id], a.location, `Nobody came for what ${a.persona.name} left. ${a.coins} coins went to the council${owned.length ? ` and ${owned.map((p) => p.name).join(", ")} stands empty` : ""}.`, 0.5);
     }
-    a.coins = 0;
+    a.coins = 0; a.savings = 0; a.debt = 0; a.debtPrincipal = 0;
   }
   /** Nights make families. A couple under their own roof, who trust each other, may have a child; children cost a coin a day; at the age of majority they step into the town. */
   private async generations(): Promise<void> {
@@ -1897,6 +1908,7 @@ export class Town {
       const a = this.addAgent({ persona: { ...c.persona, age: 16, origin: `born on the island, at ${home?.name ?? c.home}` }, owner: c.adoptedBy, funded: true, coins: 5 }, c.adoptedBy ? `ag_adopt_${c.id}` : undefined);
       const inn = this.places.get("inn"); if (inn) inn.freeBeds = Math.min(inn.beds?.capacity ?? 6, (inn.freeBeds ?? 0) + 1); // addAgent booked an inn bed; give it back
       a.location = home?.id ?? "harbor"; a.home = home && home.beds ? { place: home.id, nightsPaid: 30 } : null;
+      a.parents = [...c.parents]; // so a dying parent's estate can find them as an heir
       a.memory = [];
       this.remember(a, `I was born at ${home?.name ?? c.home} to ${c.parentNames.join(" and ")}. I grew up on this island; I know every road on it.`, 1);
       for (const pr of parents) { this.remember(a, `${pr.persona.name} raised me. ${pr.persona.summary}`, 0.8); this.remember(pr, `${c.name} is grown now, and out in the town.`, 0.9); const r = this.rel(a, pr.id); r.trust = 0.75; r.affection = 0.8; const r2 = this.rel(pr, a.id); r2.trust = 0.8; r2.affection = 0.9; }

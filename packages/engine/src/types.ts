@@ -116,6 +116,8 @@ export interface AgentState {
   intelligence: number;
   /** What schooling they have completed so far, 0..1. Starts near nothing; rises with time spent at the school, faster for the more intelligent. */
   education: number;
+  /** Who bore them, if born on the island and grown into a citizen; set once at coming of age, never changed. Absent for anyone who arrived on the boat. Used to find heirs when a parent dies. */
+  parents?: AgentId[] | null;
   id: AgentId;
   persona: Persona;
   needs: { hunger: number; rest: number; social: number; thirst?: number };
@@ -332,7 +334,7 @@ export interface AgentSnapshot {
   foodLessons?: import("./learning.ts").FoodLesson[];
   foodRoutineDecisions?: import("./learning.ts").FoodRoutineDecision[];
     deals?: Deal[];
-    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; savings?: number; debt?: number; debtPrincipal?: number; magnate?: boolean; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
+    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; savings?: number; debt?: number; debtPrincipal?: number; magnate?: boolean; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"]; parents?: AgentState["parents"];
     /** kept so a restart does not ask the same question twice, or forget a letter it promised to answer */
     lastPlan?: ActivePlan | null; replyTo?: number | null; lastHungerThought?: number; starvingThoughtDay?: number; debtThoughtDay?: number; gatheringThoughtId?: number | null;
   };
