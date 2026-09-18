@@ -223,14 +223,14 @@ export const Perception = z.object({
     belongings: InventoryView.optional(),
     learned_food: z.array(z.object({ place: PlaceId, item: z.string(), confidence: z.number(), observations: z.number() })).optional(),
     location: PlaceId,
-    needs: z.object({ hunger: z.number(), rest: z.number(), social: z.number() }),
+    needs: z.object({ hunger: z.number(), rest: z.number(), social: z.number(), thirst: z.number() }),
     coins: z.number().int(),
     inventory: z.array(z.string()),
     job: z.string().nullable(),
     /** The post they hold: where, what it pays, and the hours; null without one. */
     shift: z.object({ place: PlaceId, wage: z.number().int(), hours: z.tuple([z.number().int(), z.number().int()]) }).nullable().optional(),
     /** The needs in words, on a scale that ends in the body failing. */
-    feels: z.object({ hunger: z.string(), rest: z.string(), social: z.string() }).optional(),
+    feels: z.object({ hunger: z.string(), rest: z.string(), social: z.string(), thirst: z.string() }).optional(),
     debts: z.array(z.object({ to: z.string(), coins: z.number().int(), overdue: z.boolean() })).optional(),
     /** Promises: yours to keep, and the ones made to you. An offered one is waiting on an answer; an open one is owed. */
     deals: z.array(z.object({ id: z.number().int(), with: z.string(), what: z.string(), coins: z.number().int(), mine: z.boolean(), state: z.enum(["offered", "open"]), due_in_days: z.number().int().nullable(), construction: z.object({ site: PlaceId, mornings: z.number().int(), done: z.number().int() }).optional() })).optional(),
@@ -382,7 +382,7 @@ export const Judgement = z.object({
   coins_spent: z.number().int().min(0).max(20).default(0),
   item_gained: z.string().max(24).nullable().default(null),
   item_lost: z.string().max(24).nullable().default(null),
-  eases: z.enum(["hunger", "rest", "social"]).nullable().default(null),
+  eases: z.enum(["hunger", "rest", "social", "thirst"]).nullable().default(null),
   trust: z.array(z.object({ who: AgentRef, delta: z.number().min(-0.2).max(0.2) })).max(3).default([]),
 });
 export type Judgement = z.infer<typeof Judgement>;

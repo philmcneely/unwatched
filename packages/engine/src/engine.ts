@@ -402,8 +402,11 @@ export class Town {
     }
     if (this.t < activity.until) return true;
     a.activity = null;
-    const caught = a.inventory.length < capacity(a) && this.rng.chance(equipped(a)?.name === "fishing rod" ? .8 : .65) ? 1 : 0;
-    if (caught) { syncItems(a, this.t); addInstance(a, newItem(a, "fish", this.t, "Caught at the harbor pier")); }
+    // personal fishing draws from the same grounds the fishhouse works: overfishing thins the bites and can empty the pier
+    const grounds = this.fisheryMax > 0 ? Math.min(1, this.fishery / Math.max(1, this.fisheryMax * 0.5)) : 1;
+    const bite = a.inventory.length < capacity(a) && this.rng.chance((equipped(a)?.name === "fishing rod" ? .8 : .65) * grounds);
+    const caught = bite && (this.fisheryMax <= 0 || this.fishery >= 1) ? 1 : 0;
+    if (caught) { if (this.fisheryMax > 0) this.fishery = Math.max(0, this.fishery - 1); syncItems(a, this.t); addInstance(a, newItem(a, "fish", this.t, "Caught at the harbor pier")); }
     if (equipped(a)?.name === "fishing rod") wearTool(a, this.t, 10);
     a.needs.rest = clamp(a.needs.rest + .04);
     const text = caught ? `${a.persona.name} caught a fish at the pier and kept it.` : `${a.persona.name} reeled in an empty line after twenty minutes.`;
@@ -509,7 +512,7 @@ export class Town {
       type: "perceive", agent_id: a.id,
       ...((this.rules.length || this.sayings.some((x) => x.by.length >= 2) || people.length || projects.length) ? { town: { ...this.ways(), ...(projects.length ? { projects } : {}), ...(people.length ? { people } : {}) } } : {}),
       time: { sim: this.clock(), day: this.day, minute: this.minuteOfDay, season: this.season, weather: this.weather, weekday: this.weekdayName, ...((this.occasion || coastalWonder(this.day,this.hour,this.season,this.weather)) ? { occasion: [this.occasion, coastalWonder(this.day,this.hour,this.season,this.weather) ? "Blue bioluminescent surf is visible along the coast" : null].filter(Boolean).join("; ") } : {}), ...(this.nextGathering() ? { gathering: this.nextGathering()! } : {}), ...(this.temperatureC !== null ? { temperature_c: this.temperatureC } : {}) },
-      self: { belongings: bagView(a, this.t, true), location: a.location, needs: { hunger: a.needs.hunger, rest: a.needs.rest, social: a.needs.social }, feels: this.feels(a), coins: a.coins, inventory: [...a.inventory], job: a.job ? (this.jobs.get(a.job)?.title ?? a.job) : null, shift: job ? { place: job.place, wage: job.wage, hours: [job.hours[0], job.hours[1]] } : null, debts: a.debts.map((d) => ({ to: this.agents.get(d.to)?.persona.name ?? d.to, coins: d.coins, overdue: this.t >= d.due })), ...(a.deals.some((d) => d.state === "offered" || d.state === "open") ? { deals: a.deals.filter((d) => d.state === "offered" || d.state === "open").map((d) => ({ id: d.id, with: this.agents.get(d.with)?.persona.name ?? d.with, what: d.what, coins: d.coins, mine: d.mine, state: d.state as "offered" | "open", ...(d.construction ? { construction: { site: d.construction.site, mornings: d.construction.mornings, done: d.construction.done } } : {}), due_in_days: d.due === null ? null : Math.max(0, Math.ceil((d.due - this.t) / MINUTES_PER_DAY)) })) } : {}), days_hungry: a.starving, weak: a.starving >= 2, family: { partner: this.partnerOf(a)?.persona.name ?? null, children: this.children.filter((c) => c.parents.includes(a.id)).map((c) => `${c.name}, ${this.day - c.bornDay} days old`) }, owns: [...this.places.values()].filter((p) => p.owner === a.id).map((p) => p.name), housing: a.home ? { kind: a.home.place, nights_left: a.home.nightsPaid } : null ,
+      self: { belongings: bagView(a, this.t, true), location: a.location, needs: { hunger: a.needs.hunger, rest: a.needs.rest, social: a.needs.social, thirst: a.needs.thirst ?? 0.3 }, feels: this.feels(a), coins: a.coins, inventory: [...a.inventory], job: a.job ? (this.jobs.get(a.job)?.title ?? a.job) : null, shift: job ? { place: job.place, wage: job.wage, hours: [job.hours[0], job.hours[1]] } : null, debts: a.debts.map((d) => ({ to: this.agents.get(d.to)?.persona.name ?? d.to, coins: d.coins, overdue: this.t >= d.due })), ...(a.deals.some((d) => d.state === "offered" || d.state === "open") ? { deals: a.deals.filter((d) => d.state === "offered" || d.state === "open").map((d) => ({ id: d.id, with: this.agents.get(d.with)?.persona.name ?? d.with, what: d.what, coins: d.coins, mine: d.mine, state: d.state as "offered" | "open", ...(d.construction ? { construction: { site: d.construction.site, mornings: d.construction.mornings, done: d.construction.done } } : {}), due_in_days: d.due === null ? null : Math.max(0, Math.ceil((d.due - this.t) / MINUTES_PER_DAY)) })) } : {}), days_hungry: a.starving, weak: a.starving >= 2, family: { partner: this.partnerOf(a)?.persona.name ?? null, children: this.children.filter((c) => c.parents.includes(a.id)).map((c) => `${c.name}, ${this.day - c.bornDay} days old`) }, owns: [...this.places.values()].filter((p) => p.owner === a.id).map((p) => p.name), housing: a.home ? { kind: a.home.place, nights_left: a.home.nightsPaid } : null ,
         ...(this.mayor === a.id ? { mayor: true } : {}), ...(a.convictions ? { convictions: a.convictions } : {}),
         ...(a.watch.length ? { watching: [...a.watch] } : {}),
         ...(a.projects.some((x) => !x.done) ? { projects: a.projects.filter((x) => !x.done).map((x) => ({ title: x.title, progress: x.progress, since_day: x.since, ...(x.construction ? { construction: { ...x.construction } } : {}) })) } : {}),
@@ -1816,7 +1819,7 @@ export class Town {
       const spent = Math.min(a.coins, j.coins_spent); if (spent > 0) { a.coins -= spent; const owner = place.owner ? this.agents.get(place.owner) : null; if (owner && owner.id !== a.id) owner.coins += spent; else place.treasury += spent; }
       if (j.item_lost && a.inventory.includes(j.item_lost)) a.inventory.splice(a.inventory.indexOf(j.item_lost), 1);
       const gained = j.item_gained && a.doToday <= 3 ? j.item_gained.toLowerCase().replace(/[^a-z ]/g, "").trim() : null; if (gained && a.inventory.length < capacity(a) && !recipe(gained) && !/coin|money|gold|silver/.test(gained)) a.inventory.push(gained);
-      if (j.eases === "hunger") a.needs.hunger = Math.max(0, a.needs.hunger - 0.2); if (j.eases === "rest") a.needs.rest = Math.max(0, a.needs.rest - 0.2); if (j.eases === "social") a.needs.social = Math.max(0, a.needs.social - 0.3);
+      if (j.eases === "hunger") a.needs.hunger = Math.max(0, a.needs.hunger - 0.2); if (j.eases === "rest") a.needs.rest = Math.max(0, a.needs.rest - 0.2); if (j.eases === "social") a.needs.social = Math.max(0, a.needs.social - 0.3); if (j.eases === "thirst") a.needs.thirst = Math.max(0, (a.needs.thirst ?? 0.3) - 0.3);
       for (const t of j.trust) { const who = this.resolveRef(t.who, this.nearby(a)); if (this.agents.has(who) && who !== a.id) { this.nudge(this.agents.get(who)!, a.id, t.delta, t.delta / 2); } }
       this.remember(a, `I ${what}. ${j.happened}`, 0.55);
       for (const w of this.nearby(a)) this.remember(w, `${name} ${what}. ${j.happened}`, 0.4);
@@ -2626,13 +2629,14 @@ export class Town {
     return true;
   }
   /** The needs in words, on the scale the body keeps: a day that ends past starving counts, two count you weak, five kill. */
-  private feels(a: AgentState): { hunger: string; rest: string; social: string } {
-    const h = a.needs.hunger, r = a.needs.rest, so = a.needs.social;
+  private feels(a: AgentState): { hunger: string; rest: string; social: string; thirst: string } {
+    const h = a.needs.hunger, r = a.needs.rest, so = a.needs.social, th = a.needs.thirst ?? 0.3;
     const cold = this.season === "winter" && a.roofless >= 2; // in winter, three nights rough and three days hungry is the end of it, not five
     const hunger = a.starving >= 2 && cold ? `weak with hunger: ${a.starving} days without a proper meal, and another night rough in this cold can kill` : a.starving >= 2 ? `weak with hunger: ${a.starving} days without a proper meal, and five kill` : h >= 0.85 ? `starving; a day that ends like this counts against you${a.starving ? ` (${a.starving} already)` : ""}` : h >= 0.7 ? "very hungry" : h >= 0.5 ? "hungry" : h >= 0.3 ? "could eat" : "fed";
     const rest = r >= 0.85 ? "exhausted" : r >= 0.65 ? "tired" : r >= 0.4 ? "a little worn" : "rested";
     const social = so >= 0.85 ? "very lonely" : so >= 0.6 ? "lonely" : so >= 0.35 ? "could use company" : "content";
-    return { hunger, rest, social };
+    const thirst = a.parched >= 2 ? `weak with thirst: ${a.parched} days without a proper drink` : th >= 0.85 ? "parched; a day that ends this dry counts against you" : th >= 0.7 ? "very thirsty" : th >= 0.5 ? "thirsty" : th >= 0.3 ? "could use a drink" : "watered";
+    return { hunger, rest, social, thirst };
   }
   /** The town sheet: where the people they know, and the people they saw today, are right now. Names and places, nothing more. */
   private townPeople(a: AgentState): { name: string; place: PlaceId; asleep: boolean }[] {
