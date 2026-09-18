@@ -402,7 +402,10 @@ export interface TownSnapshot {
   laws: { text: string; by: AgentId; yes: number; no: number; open: boolean; voters?: AgentId[] }[];
   children?: Child[];
   /** The institutions: who is mayor, since when, and what the council has built. */
-  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture; factions?: import("./factions.ts").Faction[] };
+  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture; factions?: import("./factions.ts").Faction[];
+    /** Trade: goods this island makes none of itself and has gone without off the boat long enough that the shelves show it (empty or scraping the bottom) — set at the last day's end, cleared once the boat brings more; and, for each traded good, the island last seen sending it. */
+    trade?: { shortages?: string[]; partners?: Record<string, string> };
+  };
   /** A stranger a nudge sent for, still on the water. Kept across a restore so a scheduled arrival isn't lost to a restart. */
   pendingStrangers?: { atT: number; persona: Persona; coins: number; owner: string | null }[];
 }

@@ -201,6 +201,10 @@ export class Town {
   day: number;
   weather: string = "clear";
   flourShortage = false;
+  /** Goods this island makes none of itself, wholly dependent on the boat, that it has gone without long enough for the shelves to show it. Checked nightly; cleared once the boat brings more. This is where an embargo or blockade actually bites — cut the route and, in time, the shelf goes bare and the price follows. */
+  tradeShortages = new Set<string>();
+  /** For each traded good, the island it last arrived from — a trade partner an owner can be told about. */
+  tradePartners: Record<string, string> = {};
   papers: Paper[] = [];
   /** Where the weather comes from: the island's own dice, or a real sky that the server sets. */
   weatherSource: "roll" | "real" = "roll";
@@ -362,6 +366,7 @@ export class Town {
   /** Bring the town back from its record. Replaces whatever population exists. */
   restore(snap: TownSnapshot): void {
     this.t = snap.t; this.day = Math.floor(snap.t / MINUTES_PER_DAY) + 1; this.weather = snap.weather; this.flourShortage = snap.flourShortage; if (typeof snap.fishery === "number") this.fishery = snap.fishery; // the minute counter is the truth; the day follows it
+    this.tradeShortages = new Set(snap.civic?.trade?.shortages ?? []); this.tradePartners = { ...(snap.civic?.trade?.partners ?? {}) };
     this.agents.clear();
     for (const j of this.jobs.values()) j.holders = [];
     // what people built, over the map the code lays out: the code owns positions and roads, the record owns everything else
@@ -421,7 +426,7 @@ export class Town {
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
-      papers: this.papers.slice(-14), laws: this.laws, children: this.children.map((c) => ({ ...c })), civic: { evolution: structuredClone(this.evolution), nextDealId: this.nextDealId, mayor: this.mayor, elected: this.electedDay, works: [...this.works], gatherings: this.gatherings.filter((g) => !g.held).map((g) => ({ ...g })), wedded: [...this.wedded], chain: this.chain.slice(-400), rules: [...this.rules], sayings: this.sayings.slice(-40), culture: structuredClone(this.culture), factions: structuredClone(this.factions) },
+      papers: this.papers.slice(-14), laws: this.laws, children: this.children.map((c) => ({ ...c })), civic: { evolution: structuredClone(this.evolution), nextDealId: this.nextDealId, mayor: this.mayor, elected: this.electedDay, works: [...this.works], gatherings: this.gatherings.filter((g) => !g.held).map((g) => ({ ...g })), wedded: [...this.wedded], chain: this.chain.slice(-400), rules: [...this.rules], sayings: this.sayings.slice(-40), culture: structuredClone(this.culture), factions: structuredClone(this.factions), trade: { shortages: [...this.tradeShortages], partners: { ...this.tradePartners } } },
       pendingStrangers: structuredClone(this.pendingStrangers),
     };
   }
@@ -1587,6 +1592,14 @@ export class Town {
     else if (!short && this.flourShortage) { this.flourShortage = false; this.emit("economy.price", [], "bakery", "Flour is back at the bakery. Bread is a coin again.", 0.4); }
     // unions, guilds, parties, faiths: who the day's real circumstance actually binds together, and whether that is now enough to press on the town
     this.updateFactions();
+    // trade dependency: a good this island makes none of itself runs on what the boat brings alone. Cut the route — a blockade, or friction thick enough to starve demand — and in time every shelf that carries it scrapes bare. Leaky, not a wall: it takes real days of nothing landing, not one thin morning.
+    for (const item of this.tradeDependentItems()) {
+      const shelves = this.pack.supply.filter((l) => l.item === item).map((l) => l.to);
+      const bare = shelves.length > 0 && shelves.every((id) => { const p = this.places.get(id); if (!p) return true; const have = p.stock[item] ?? 0; const target = this.shelfTarget(p, item); return have <= 0 || (target > 0 && have <= Math.ceil(target * 0.2)); });
+      const had = this.tradeShortages.has(item);
+      if (bare && !had) { this.tradeShortages.add(item); this.emit("economy.price", [], undefined, `${this.name} has had no ${item} off the boat: the shelves are bare and what little is left costs dear.`, 0.55, { item, shortage: true }); }
+      else if (!bare && had) { this.tradeShortages.delete(item); this.emit("economy.price", [], undefined, `${item.charAt(0).toUpperCase()}${item.slice(1)} is coming in off the boat again.`, 0.35, { item, shortage: false }); }
+    }
     this.arrivalsToday = 0; this.departuresToday = 0;
   }
 
@@ -1963,6 +1976,16 @@ export class Town {
     this.minted += spent; // the coins the visitors left came from the mainland
     this.emit("boat.dock", [], "harbor", `The boat brought ${visitors} visitor${visitors === 1 ? "" : "s"} to ${this.name}. They spent ${spent} coins about the island${feast ? `, the ${feast.name} in full swing` : ""}.`, 0.3, { visitors, coins: spent, ...(feast ? { feast: feast.name } : {}) });
   }
+  /** Goods this island's own economy makes none of — no produce line makes them — but a supply line still moves them to a shelf. Wholly the boat's doing: this island's comparative disadvantage, read straight off its own pack rather than named by hand. */
+  tradeDependentItems(): string[] {
+    const made = new Set(this.pack.produce.map((pr) => pr.makes));
+    return [...new Set(this.pack.supply.filter((l) => !made.has(l.item)).map((l) => l.item))];
+  }
+  /** What this island is built to sell abroad: produce lines whose output nothing else here consumes further, so the surplus is the island's own to trade — its comparative advantage, read off the pack rather than a hardcoded list. */
+  specialties(): string[] {
+    const consumedFurther = new Set(this.pack.produce.filter((pr) => pr.needs).map((pr) => pr.needs!.item));
+    return [...new Set(this.pack.produce.filter((pr) => this.pack.exports.some((e) => e.item === pr.makes) && !consumedFurther.has(pr.makes)).map((pr) => pr.makes))];
+  }
   /** What the island could put on the boat this morning: the surplus above what each place keeps back. */
   cargoOffers(): { item: string; qty: number; price: number; place: PlaceId }[] {
     const out: { item: string; qty: number; price: number; place: PlaceId }[] = [];
@@ -1972,6 +1995,7 @@ export class Town {
   /** An island in trouble: no flour and no bread, or its harbour/farms wrecked, or too many going hungry, or too many down sick. Neighbours can see this (via the hub) and send food aid, or a boat may go carefully. */
   get distressed(): boolean {
     if (this.flourShortage) return true;
+    if (this.tradeShortages.size > 0) return true; // an embargoed or blockaded island runs dry on what it cannot make itself
     if (["fields", "harbor", "fishhouse", "fishquay", "bakery", "mill", "orchard"].some((id) => { const p = this.places.get(id); return !!(p?.brokenUntil && p.brokenUntil > this.day); })) return true;
     const n = this.agents.size; if (!n) return false;
     if ([...this.agents.values()].filter((a) => a.illness.sick).length > n * DISEASE_STRICKEN_SHARE) return true;
@@ -2005,7 +2029,7 @@ export class Town {
       const room = Math.max(0, line.upTo! - (to.stock[it.item] ?? 0)); const buyer = to.owner ? this.agents.get(to.owner) : null; const purse = buyer ? buyer.coins : to.treasury;
       const qty = Math.min(it.qty, room, Math.floor(purse / it.price)); if (qty <= 0) continue;
       const cost = qty * it.price; if (buyer) buyer.coins -= cost; else to.treasury -= cost; this.burned += cost; paid += cost;
-      to.stock[it.item] = (to.stock[it.item] ?? 0) + qty; taken.push({ item: it.item, qty });
+      to.stock[it.item] = (to.stock[it.item] ?? 0) + qty; taken.push({ item: it.item, qty }); this.tradePartners[it.item] = from;
     }
     if (taken.length) this.emit("boat.cargo", [], "harbor", `The boat brought ${taken.map((t) => `${t.qty} ${t.item}`).join(", ")} from ${from}, for ${paid} coins.`, 0.35, { from, coins: paid, items: taken });
     return taken;
@@ -2288,6 +2312,7 @@ export class Town {
     // supply & demand: a nearly-bare shelf asks a coin more, one piled past double what it holds asks a coin less — bounded, so prices stay legible
     const want = this.shelfTarget(place, item);
     if (want > 0) { const have = place.stock[item] ?? 0; if (have > 0 && have <= Math.ceil(want * 0.2)) p += 1; else if (have >= want * 2) p = Math.max(1, p - 1); }
+    if (this.tradeShortages.has(item)) p += 1; // a staple the boat has stopped bringing runs dear wherever it is still had at all
     const cap = this.rules.find((r): r is Extract<Rule, { kind: "cap" }> => r.kind === "cap" && r.item === item); if (cap) p = Math.min(p, cap.price);
     return Math.max(1, p);
   }
