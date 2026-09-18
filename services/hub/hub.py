@@ -15,7 +15,7 @@ Stdlib only (http.server + sqlite3), matching fleet convention. Env:
   HUB_DB       sqlite path (default /data/hub.db)
   HUB_LIVE_SEC seconds since last heartbeat to still count an island "live" (default 360)
 """
-import json, os, re, sqlite3, threading, time, html
+import json, os, re, sqlite3, threading, time, html, random
 import urllib.request, urllib.error
 import concurrent.futures
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +31,18 @@ STANCES = ("ally", "neutral", "rival", "enemy")
 # smuggled through, some people still cross. A stance sets a default drag (0..1 = the share of
 # crossings turned back / the volume lost); only an explicit `blockade` is a true hard stop.
 STANCE_FRICTION = {"ally": 0.0, "neutral": 0.0, "rival": 0.35, "enemy": 0.7}
+
+# ---- mainland-as-actor (docs/hub-design.md §12): a mood/pressure state machine that speaks
+# through occasional edicts. This is FLAVOUR/INFLUENCE, never a command — islands read it and
+# choose whether to honour it (exactly like a relation's friction). ----
+MOODS = ("generous", "content", "neutral", "wary", "grasping", "hostile")
+EDICT_TEMPLATES = (
+    {"kind": "tariff", "text": "The crown raises duties on incoming trade.", "priceMultiplier": 0.85},
+    {"kind": "grain", "text": "A call for grain: the mainland pays double for flour and bread.",
+     "item": "bread", "priceMultiplier": 2.0},
+    {"kind": "bounty", "text": "The crown posts a bounty on the region's known troublemakers.", "priceMultiplier": None},
+)
+MAINLAND_TICK_SEC = int(os.environ.get("HUB_MAINLAND_TICK_SEC", "120"))
 
 _lock = threading.Lock()
 
@@ -63,6 +75,24 @@ def init_db():
             c.execute("ALTER TABLE relations ADD COLUMN friction REAL DEFAULT 0")
         if "blockade" not in cols:
             c.execute("ALTER TABLE relations ADD COLUMN blockade INTEGER DEFAULT 0")
+        # ---- mainland-as-actor (§12): one shared mood/pressure row + a table of edicts ----
+        c.execute("""CREATE TABLE IF NOT EXISTS mainland_state (
+            id TEXT PRIMARY KEY, mood TEXT, pressure REAL, updated_at REAL )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS mainland_edicts (
+            id TEXT PRIMARY KEY, kind TEXT, text TEXT, item TEXT, price_multiplier REAL,
+            source TEXT, created_at REAL, expires_at REAL, active INTEGER DEFAULT 1 )""")
+        if not c.execute("SELECT 1 FROM mainland_state WHERE id='*'").fetchone():
+            c.execute("INSERT INTO mainland_state (id,mood,pressure,updated_at) VALUES ('*','neutral',0.0,?)", (now(),))
+        # ---- coordinated cross-island events (§11/§19 v4): region-wide happenings, hub-recorded ----
+        c.execute("""CREATE TABLE IF NOT EXISTS events (
+            id TEXT PRIMARY KEY, kind TEXT, islands TEXT, text TEXT, extra TEXT,
+            created_at REAL, expires_at REAL, active INTEGER DEFAULT 1 )""")
+        # ---- cross-island notoriety / fugitive tracking (§14): dossier + per-island reports ----
+        c.execute("""CREATE TABLE IF NOT EXISTS people (
+            id TEXT PRIMARY KEY, aliases TEXT, updated_at REAL )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS people_reports (
+            rid INTEGER PRIMARY KEY AUTOINCREMENT, person_id TEXT, island TEXT,
+            notoriety REAL, fugitive INTEGER, note TEXT, at REAL )""")
 
 
 def now():
@@ -154,9 +184,161 @@ def all_relations():
 
 
 def world_map():
-    # v1: islands + relations are real; conflicts/mainland/events stay stable-but-empty until later phases.
+    # conflicts stay stable-but-empty until that later phase; mainland/events are now real.
     return {"islands": all_islands(), "relations": all_relations(), "conflicts": [],
-            "mainland": {"mood": "neutral", "edicts": []}, "events": []}
+            "mainland": get_mainland(), "events": [e for e in all_events(50) if e["active"]]}
+
+
+# ---- mainland as an actor (§12): mood/pressure random-walk + occasional edicts. This is
+# influence/friction only — nothing here reaches into an island; islands pull it and choose. ----
+def _edict_row(r):
+    return {"id": r["id"], "kind": r["kind"], "text": r["text"], "item": r["item"],
+            "priceMultiplier": r["price_multiplier"], "source": r["source"],
+            "createdAt": r["created_at"], "expiresAt": r["expires_at"]}
+
+
+def get_mainland():
+    t = now()
+    with db() as c:
+        row = c.execute("SELECT * FROM mainland_state WHERE id='*'").fetchone()
+        edicts = [_edict_row(r) for r in c.execute(
+            "SELECT * FROM mainland_edicts WHERE active=1 ORDER BY created_at DESC")
+            if not r["expires_at"] or r["expires_at"] >= t]
+    return {"mood": (row["mood"] if row else "neutral"),
+            "pressure": float(row["pressure"] or 0.0) if row else 0.0,
+            "updatedAt": row["updated_at"] if row else t,
+            "edicts": edicts}
+
+
+def set_mainland_mood(mood, pressure=None):
+    with _lock, db() as c:
+        row = c.execute("SELECT pressure FROM mainland_state WHERE id='*'").fetchone()
+        pr = float(row["pressure"] or 0.0) if row and pressure is None else pressure
+        pr = max(0.0, min(1.0, float(pr if pr is not None else 0.0)))
+        c.execute("""INSERT INTO mainland_state (id,mood,pressure,updated_at) VALUES ('*',?,?,?)
+            ON CONFLICT(id) DO UPDATE SET mood=excluded.mood, pressure=excluded.pressure, updated_at=excluded.updated_at""",
+            (mood, pr, now()))
+    return get_mainland()
+
+
+def add_edict(kind, text, item=None, price_multiplier=None, ttl_sec=None, source="admin"):
+    eid = f"med{int(now()*1000)}{random.randint(100,999)}"
+    expires_at = (now() + float(ttl_sec)) if ttl_sec else None
+    with _lock, db() as c:
+        c.execute("""INSERT INTO mainland_edicts (id,kind,text,item,price_multiplier,source,created_at,expires_at,active)
+            VALUES (?,?,?,?,?,?,?,?,1)""",
+            (eid, kind, text, item, price_multiplier, source, now(), expires_at))
+    return eid
+
+
+def retire_edict(eid):
+    with _lock, db() as c:
+        c.execute("UPDATE mainland_edicts SET active=0 WHERE id=?", (eid,))
+
+
+def _mainland_autoshift():
+    with _lock, db() as c:
+        row = c.execute("SELECT * FROM mainland_state WHERE id='*'").fetchone()
+        idx = MOODS.index(row["mood"]) if row and row["mood"] in MOODS else 2
+        pressure = float(row["pressure"] or 0.0) if row else 0.0
+        idx = max(0, min(len(MOODS) - 1, idx + random.choice((-1, 0, 0, 0, 1))))
+        pressure = max(0.0, min(1.0, pressure + random.uniform(-0.08, 0.08)))
+        mood = MOODS[idx]
+        c.execute("""INSERT INTO mainland_state (id,mood,pressure,updated_at) VALUES ('*',?,?,?)
+            ON CONFLICT(id) DO UPDATE SET mood=excluded.mood, pressure=excluded.pressure, updated_at=excluded.updated_at""",
+            (mood, pressure, now()))
+
+
+def mainland_loop():
+    # A slow, autonomous drift so the mainland occasionally speaks on its own, in addition to
+    # anything an admin/game-master triggers directly. Never crashes the hub; best-effort only.
+    while True:
+        time.sleep(max(20, MAINLAND_TICK_SEC))
+        try:
+            _mainland_autoshift()
+            if random.random() < 0.35:
+                tpl = random.choice(EDICT_TEMPLATES)
+                add_edict(tpl["kind"], tpl["text"], item=tpl.get("item"),
+                          price_multiplier=tpl.get("priceMultiplier"),
+                          ttl_sec=random.randint(600, 3600), source="mainland")
+        except Exception:
+            pass
+
+
+# ---- coordinated cross-island events (§11 / v4 phase, brought forward): region-wide happenings
+# the hub records and broadcasts. Purely additive — islands read /events/:id if they choose. ----
+def _event_row(r):
+    islands = "all" if r["islands"] == "all" else json.loads(r["islands"] or "[]")
+    expired = bool(r["expires_at"]) and r["expires_at"] < now()
+    return {"id": r["id"], "kind": r["kind"], "islands": islands, "text": r["text"],
+            "extra": json.loads(r["extra"] or "{}"), "createdAt": r["created_at"],
+            "expiresAt": r["expires_at"], "active": bool(r["active"]) and not expired}
+
+
+def add_event(kind, islands, text, extra=None, ttl_sec=None):
+    eid = f"ev{int(now()*1000)}{random.randint(100,999)}"
+    islands_val = "all" if islands == "all" else json.dumps(list(islands or []))
+    expires_at = (now() + float(ttl_sec)) if ttl_sec else None
+    with _lock, db() as c:
+        c.execute("""INSERT INTO events (id,kind,islands,text,extra,created_at,expires_at,active)
+            VALUES (?,?,?,?,?,?,?,1)""", (eid, kind, islands_val, text, json.dumps(extra or {}), now(), expires_at))
+        row = c.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
+    return _event_row(row)
+
+
+def all_events(limit=50):
+    with db() as c:
+        rows = c.execute("SELECT * FROM events ORDER BY created_at DESC LIMIT ?", (limit,))
+        return [_event_row(r) for r in rows]
+
+
+def active_events_for(island_id):
+    return [e for e in all_events(200) if e["active"] and (e["islands"] == "all" or island_id in e["islands"])]
+
+
+def retire_event(eid):
+    with _lock, db() as c:
+        c.execute("UPDATE events SET active=0 WHERE id=?", (eid,))
+
+
+# ---- cross-island notoriety / fugitive tracking (§14, the provocateur trail). The hub only
+# INGESTS what islands choose to report and AGGREGATES it — it never computes guilt itself. ----
+def report_person(person_id, island, notoriety, fugitive, note, alias=None):
+    with _lock, db() as c:
+        row = c.execute("SELECT aliases FROM people WHERE id=?", (person_id,)).fetchone()
+        aliases = json.loads(row["aliases"]) if row else []
+        if alias and alias not in aliases:
+            aliases.append(alias)
+        if row:
+            c.execute("UPDATE people SET aliases=?, updated_at=? WHERE id=?", (json.dumps(aliases), now(), person_id))
+        else:
+            c.execute("INSERT INTO people (id,aliases,updated_at) VALUES (?,?,?)", (person_id, json.dumps(aliases), now()))
+        c.execute("""INSERT INTO people_reports (person_id,island,notoriety,fugitive,note,at) VALUES (?,?,?,?,?,?)""",
+            (person_id, island, max(0.0, min(1.0, float(notoriety or 0.0))), 1 if fugitive else 0, note or "", now()))
+
+
+def person_dossier(person_id):
+    with db() as c:
+        prow = c.execute("SELECT * FROM people WHERE id=?", (person_id,)).fetchone()
+        reports = list(c.execute("SELECT * FROM people_reports WHERE person_id=? ORDER BY at ASC", (person_id,)))
+    if not prow and not reports:
+        return None
+    trail = [{"island": r["island"], "at": r["at"], "notoriety": r["notoriety"],
+              "fugitive": bool(r["fugitive"]), "note": r["note"]} for r in reports]
+    latest_per_island = {}
+    for r in reports:  # ordered ASC, so the last write per island wins = the latest report
+        latest_per_island[r["island"]] = r
+    return {"id": person_id, "aliases": json.loads(prow["aliases"]) if prow else [],
+            "score": sum(r["notoriety"] or 0.0 for r in latest_per_island.values()),
+            "fugitive": any(r["fugitive"] for r in latest_per_island.values()),
+            "islandsVisited": list(latest_per_island.keys()), "trail": trail}
+
+
+def all_notorious(limit=20):
+    with db() as c:
+        ids = [r["person_id"] for r in c.execute("SELECT DISTINCT person_id FROM people_reports")]
+    people = sorted((p for p in (person_dossier(pid) for pid in ids) if p), key=lambda p: p["score"], reverse=True)
+    return people[:limit]
 
 
 # ---- the regional gazette: each island runs its own paper (GET {url}/api/papers/latest,
@@ -264,16 +446,17 @@ h1{font-size:20px;margin:0;font-weight:800}
   color:var(--ink);font:800 12px/1 ui-sans-serif,system-ui,sans-serif;padding:8px 14px;border-radius:999px;
   letter-spacing:.03em;box-shadow:0 2px 8px rgba(20,45,40,.18)}
 .gazBtn:hover{background:#fff}
-#gazPanel{position:fixed;top:0;right:0;height:100%;width:min(400px,92vw);background:#f7f6f3;color:var(--ink);
+header{flex-wrap:wrap}
+.panel{position:fixed;top:0;right:0;height:100%;width:min(400px,92vw);background:#f7f6f3;color:var(--ink);
   box-shadow:-10px 0 34px rgba(20,45,40,.28);z-index:15;transform:translateX(105%);transition:transform .28s ease;
   display:flex;flex-direction:column}
-#gazPanel.open{transform:translateX(0)}
-#gazPanel .gazHead{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(18,48,43,.15);
+.panel.open{transform:translateX(0)}
+.panel .gazHead{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid rgba(18,48,43,.15);
   text-shadow:none}
-#gazPanel .gazHead .eyebrow{color:#0f3a34}
-#gazPanel .gazHead h2{margin:0 0 0 2px;font-size:17px;flex:1;font-weight:800}
-#gazPanel .gazClose{cursor:pointer;background:none;border:none;font-size:22px;color:var(--ink);line-height:1;padding:2px 4px}
-#gazPanel .gazBody{overflow-y:auto;padding:6px 18px 30px}
+.panel .gazHead .eyebrow{color:#0f3a34}
+.panel .gazHead h2{margin:0 0 0 2px;font-size:17px;flex:1;font-weight:800}
+.panel .gazClose{cursor:pointer;background:none;border:none;font-size:22px;color:var(--ink);line-height:1;padding:2px 4px}
+.panel .gazBody{overflow-y:auto;padding:6px 18px 30px}
 .edition{margin:16px 0;padding-bottom:16px;border-bottom:1px dashed rgba(18,48,43,.22)}
 .edition:last-child{border-bottom:none}
 .edition .eName{font-size:11px;text-transform:uppercase;letter-spacing:.12em;font-weight:800;color:#0f3a34}
@@ -283,15 +466,48 @@ h1{font-size:20px;margin:0;font-weight:800}
 .edition ul{margin:0;padding-left:18px;font-size:12.5px;color:#20403a}
 .edition ul li{margin:2px 0}
 .gazEmpty{color:#5a726c;font-size:13px;padding:26px 0;text-align:center}
+/* mainland / events / watchlist panels (meta-game additions, same panel chrome as the gazette) */
+.mlBadge{pointer-events:none;font-size:12px;font-weight:700;color:#20403a}
+.moodRow{display:flex;align-items:center;gap:10px;padding:14px 18px 4px}
+.moodPill{font:800 11px/1 ui-sans-serif,system-ui,sans-serif;padding:5px 10px;border-radius:999px;letter-spacing:.03em;text-transform:uppercase}
+.moodPill.generous,.moodPill.content{background:rgba(47,158,109,.18);color:#1f6b4c}
+.moodPill.neutral{background:rgba(125,143,136,.18);color:#3f524d}
+.moodPill.wary,.moodPill.grasping{background:rgba(201,138,31,.18);color:#7a5510}
+.moodPill.hostile{background:rgba(228,87,46,.18);color:#a3331a}
+.edictItem,.eventItem,.wlItem{margin:14px 18px;padding-bottom:14px;border-bottom:1px dashed rgba(18,48,43,.22)}
+.edictItem:last-child,.eventItem:last-child,.wlItem:last-child{border-bottom:none}
+.edictItem .eTitle,.eventItem .eTitle{font-size:14px;font-weight:800;margin:0 0 3px}
+.edictItem .eMeta,.eventItem .eMeta,.wlItem .wlMeta{font-size:11.5px;color:#5a726c}
+.wlItem .wlName{font-size:15px;font-weight:800}
+.wlItem .wlScore{float:right;font-size:12px;font-weight:800;color:#a3331a}
+.wlItem .trail{font-size:12px;color:#20403a;margin-top:5px}
+.wlItem .fugBadge{display:inline-block;margin-left:6px;font-size:10px;font-weight:800;color:#fff;background:var(--ember);padding:2px 6px;border-radius:999px;vertical-align:middle}
+.isle .badge.wanted{right:auto;left:2%;background:#3a544e}
 </style></head><body>
 <header><span class=eyebrow>Unwatched</span><h1>The Archipelago</h1><span class=count id=count></span>
+<span id=mlBadge class=mlBadge></span>
+<button id=mainlandBtn class=gazBtn type=button>🏛 Mainland</button>
+<button id=eventsBtn class=gazBtn type=button>🌍 Events</button>
+<button id=watchBtn class=gazBtn type=button>🕵 Watchlist</button>
 <button id=gazBtn class=gazBtn type=button>📰 Gazette</button></header>
 <div id=board></div>
 <div class=hint>scroll / pinch to zoom · drag to pan · click an island to enter</div>
 <div class=enter id=enter></div>
-<div id=gazPanel>
+<div id=gazPanel class=panel>
   <div class=gazHead><span class=eyebrow>The Regional</span><h2>Gazette</h2><button id=gazClose class=gazClose type=button aria-label=close>&times;</button></div>
   <div id=gazBody class=gazBody><div class=gazEmpty>Loading the wires…</div></div>
+</div>
+<div id=mainlandPanel class=panel>
+  <div class=gazHead><span class=eyebrow>The Crown</span><h2>Mainland</h2><button id=mainlandClose class=gazClose type=button aria-label=close>&times;</button></div>
+  <div id=mainlandBody class=gazBody><div class=gazEmpty>Loading…</div></div>
+</div>
+<div id=eventsPanel class=panel>
+  <div class=gazHead><span class=eyebrow>The Archipelago</span><h2>Events</h2><button id=eventsClose class=gazClose type=button aria-label=close>&times;</button></div>
+  <div id=eventsBody class=gazBody><div class=gazEmpty>Loading…</div></div>
+</div>
+<div id=watchPanel class=panel>
+  <div class=gazHead><span class=eyebrow>Most</span><h2>Watchlist</h2><button id=watchClose class=gazClose type=button aria-label=close>&times;</button></div>
+  <div id=watchBody class=gazBody><div class=gazEmpty>Loading…</div></div>
 </div>
 <script>
 const POS={capital:[1000,600],island:[430,360],kestrel:[1560,360],cairnhold:[1640,900],vinehaven:[500,960]};
@@ -313,7 +529,7 @@ async function build(){
     const left=c[0]-w/2, top=c[1]-h/2;
     minx=Math.min(minx,left);miny=Math.min(miny,top);maxx=Math.max(maxx,left+w);maxy=Math.max(maxy,top+h);
     rects[i.id]={cx:left+w/2,cy:top+h/2,left,top,w,h};
-    const el=document.createElement("div"); el.className="isle"+(i.distress?" distress":""); el.style.cssText=`left:${left}px;top:${top}px;width:${w}px;height:${h}px`;
+    const el=document.createElement("div"); el.className="isle"+(i.distress?" distress":""); el.dataset.iid=i.id; el.style.cssText=`left:${left}px;top:${top}px;width:${w}px;height:${h}px`;
     el.innerHTML=`<img loading=lazy src="/snap/${encodeURIComponent(i.id)}.png?v=${Math.floor((i.lastSeen||0))}" alt="${esc(i.name)}" onerror="this.style.opacity=.25">`+
       (i.distress?`<div class=badge>&#9888; needs food</div>`:``)+
       `<div class=lbl><div class=nm>${i.pack==="capital"?"★ ":""}${esc(i.name)}</div>`+
@@ -324,6 +540,21 @@ async function build(){
   document.getElementById("count").textContent=xs.length+" islands · "+xs.filter(i=>i.live).length+" live";
   if(xs.length){const bw=maxx-minx,bh=maxy-miny,pad=90;const z=Math.min((innerWidth-pad*2)/bw,(innerHeight-pad*2)/bh,1.2);view.z=z;view.x=(innerWidth-bw*z)/2-minx*z;view.y=(innerHeight-bh*z)/2-miny*z+20;apply();}
   if(xs.length) drawRelations(rects,Math.max(0,maxx),Math.max(0,maxy));
+  drawNotorious();
+}
+async function drawNotorious(){
+  // best-effort overlay: mark the last-known island of anyone on the watchlist — additive, never
+  // blocks tile rendering if the endpoint is slow/unreachable.
+  let d; try{ d=await (await fetch("/people/notorious",{cache:"no-store"})).json(); }catch(e){ return; }
+  (d.people||[]).forEach(p=>{
+    if(!p.trail||!p.trail.length) return;
+    const last=p.trail[p.trail.length-1];
+    const el=board.querySelector(`.isle[data-iid="${CSS.escape(last.island)}"]`);
+    if(!el) return;
+    const b=document.createElement("div"); b.className="badge wanted";
+    b.textContent=(p.fugitive?"🕵 wanted: ":"⚠ notorious: ")+esc((p.aliases&&p.aliases[0])||p.id);
+    el.appendChild(b);
+  });
 }
 async function drawRelations(rects,boardW,boardH){
   let m; try{ m=await (await fetch("/world/map",{cache:"no-store"})).json(); }
@@ -346,10 +577,16 @@ async function drawRelations(rects,boardW,boardH){
   board.insertBefore(svg,board.firstChild);
 }
 function enter(i){ if(!i.url)return; const e=document.getElementById("enter"); e.style.opacity="1"; setTimeout(()=>location.href=i.url,400); }
-// ---- regional gazette panel ----
+// ---- side panels: gazette (existing) + mainland / events / watchlist (meta-game additions).
+// All share the same slide-in chrome; opening one closes the others. ----
 const gazPanel=document.getElementById("gazPanel"), gazBody=document.getElementById("gazBody");
-function openGazette(){ gazPanel.classList.add("open"); loadGazette(); }
-function closeGazette(){ gazPanel.classList.remove("open"); }
+const mlBadge=document.getElementById("mlBadge");
+const PANELS={
+  gaz:{el:gazPanel,load:loadGazette}, mainland:{el:document.getElementById("mainlandPanel"),load:loadMainland},
+  events:{el:document.getElementById("eventsPanel"),load:loadEvents}, watch:{el:document.getElementById("watchPanel"),load:loadWatch},
+};
+function closePanels(){ Object.values(PANELS).forEach(p=>p.el.classList.remove("open")); }
+function openPanel(key){ closePanels(); PANELS[key].el.classList.add("open"); PANELS[key].load(); }
 async function loadGazette(){
   gazBody.innerHTML="<div class=gazEmpty>Loading the wires…</div>";
   let d; try{ d=await (await fetch("/world/gazette",{cache:"no-store"})).json(); }
@@ -363,10 +600,59 @@ async function loadGazette(){
     ((e.briefs&&e.briefs.length)?`<ul>${e.briefs.map(b=>`<li>${esc(b)}</li>`).join("")}</ul>`:``)+
     `</div>`).join("");
 }
-document.getElementById("gazBtn").addEventListener("click",e=>{e.stopPropagation();openGazette();});
-document.getElementById("gazClose").addEventListener("click",e=>{e.stopPropagation();closeGazette();});
+async function loadMainland(){
+  const body=document.getElementById("mainlandBody");
+  body.innerHTML="<div class=gazEmpty>Reading the crown's dispatches…</div>";
+  let d; try{ d=await (await fetch("/world/mainland",{cache:"no-store"})).json(); }
+  catch(e){ body.innerHTML="<div class=gazEmpty>Could not reach the mainland.</div>"; return; }
+  mlBadge.textContent="🏛 Mainland: "+(d.mood||"neutral");
+  const edicts=d.edicts||[];
+  let out=`<div class=moodRow><span class="moodPill ${esc(d.mood)}">${esc(d.mood)}</span><span class=eMeta>pressure ${Math.round((d.pressure||0)*100)}%</span></div>`;
+  out+=edicts.length?edicts.map(e=>`<div class=edictItem><div class=eTitle>${esc(e.text)}</div>`+
+    `<div class=eMeta>${esc(e.kind)}${e.item?" · "+esc(e.item):""}${e.priceMultiplier!=null?" · ×"+e.priceMultiplier:""}${e.source?" · "+esc(e.source):""}</div></div>`).join("")
+    :`<div class=gazEmpty>No active edicts.</div>`;
+  body.innerHTML=out;
+}
+async function loadEvents(){
+  const body=document.getElementById("eventsBody");
+  body.innerHTML="<div class=gazEmpty>Checking the wires…</div>";
+  let d; try{ d=await (await fetch("/world/events",{cache:"no-store"})).json(); }
+  catch(e){ body.innerHTML="<div class=gazEmpty>Could not reach the hub.</div>"; return; }
+  const evs=d.events||[];
+  if(!evs.length){ body.innerHTML="<div class=gazEmpty>No events on record.</div>"; return; }
+  body.innerHTML=evs.map(e=>{
+    const when=e.createdAt?new Date(e.createdAt*1000).toLocaleString():"";
+    const where=e.islands==="all"?"all islands":(e.islands||[]).join(", ");
+    return `<div class=eventItem><div class=eTitle>${e.active?"":"⏹ "}${esc(e.text)}</div>`+
+      `<div class=eMeta>${esc(e.kind)} · ${esc(where)} · ${esc(when)}${e.active?"":" · ended"}</div></div>`;
+  }).join("");
+}
+async function loadWatch(){
+  const body=document.getElementById("watchBody");
+  body.innerHTML="<div class=gazEmpty>Checking the dossiers…</div>";
+  let d; try{ d=await (await fetch("/people/notorious",{cache:"no-store"})).json(); }
+  catch(e){ body.innerHTML="<div class=gazEmpty>Could not reach the hub.</div>"; return; }
+  const ppl=d.people||[];
+  if(!ppl.length){ body.innerHTML="<div class=gazEmpty>No one's made a name for themself yet.</div>"; return; }
+  body.innerHTML=ppl.map(p=>{
+    const trail=(p.trail||[]).map(t=>esc(t.island)).join(" → ");
+    return `<div class=wlItem><div class=wlName>${esc((p.aliases&&p.aliases[0])||p.id)}`+
+      (p.fugitive?`<span class=fugBadge>fugitive</span>`:``)+`<span class=wlScore>${(p.score||0).toFixed(2)}</span></div>`+
+      `<div class=wlMeta>${esc(p.id)} · ${(p.islandsVisited||[]).length} island(s)</div>`+
+      (trail?`<div class=trail>${trail}</div>`:``)+`</div>`;
+  }).join("");
+}
+document.getElementById("gazBtn").addEventListener("click",e=>{e.stopPropagation();openPanel("gaz");});
+document.getElementById("gazClose").addEventListener("click",e=>{e.stopPropagation();closePanels();});
+document.getElementById("mainlandBtn").addEventListener("click",e=>{e.stopPropagation();openPanel("mainland");});
+document.getElementById("mainlandClose").addEventListener("click",e=>{e.stopPropagation();closePanels();});
+document.getElementById("eventsBtn").addEventListener("click",e=>{e.stopPropagation();openPanel("events");});
+document.getElementById("eventsClose").addEventListener("click",e=>{e.stopPropagation();closePanels();});
+document.getElementById("watchBtn").addEventListener("click",e=>{e.stopPropagation();openPanel("watch");});
+document.getElementById("watchClose").addEventListener("click",e=>{e.stopPropagation();closePanels();});
+loadMainland(); setInterval(loadMainland,60000); // ambient header badge, independent of the panel
 let drag=null,moved=false;
-addEventListener("pointerdown",e=>{if(e.target.closest("header,.hint,#gazPanel"))return;drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y};moved=false;});
+addEventListener("pointerdown",e=>{if(e.target.closest("header,.hint,.panel"))return;drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y};moved=false;});
 addEventListener("pointermove",e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>5)moved=true;view.x=drag.vx+dx;view.y=drag.vy+dy;apply();});
 addEventListener("pointerup",()=>{setTimeout(()=>drag=null,0);});
 addEventListener("click",e=>{if(moved)e.stopPropagation();},true);
@@ -427,6 +713,19 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, world_map())
         if p == "/world/gazette":
             return self._send(200, get_gazette())
+        if p == "/world/mainland":
+            return self._send(200, get_mainland())
+        if p == "/world/events":
+            return self._send(200, {"events": all_events(50)})
+        m = re.match(r"^/events/([^/]+)$", p)  # what THIS island should see, per §11 (islands opt in)
+        if m:
+            return self._send(200, {"events": active_events_for(m.group(1))})
+        if p == "/people/notorious":
+            return self._send(200, {"people": all_notorious(20)})
+        m = re.match(r"^/people/([^/]+)$", p)
+        if m:
+            person = person_dossier(m.group(1))
+            return self._send(200, person) if person else self._send(404, {"error": "no such person"})
         m = re.match(r"^/world/islands/([^/]+)$", p)
         if m:
             iid = m.group(1)
@@ -470,6 +769,37 @@ class H(BaseHTTPRequestHandler):
                 if not b.get("from") or not b.get("to"):
                     return self._send(400, {"error": "from and to required"})
                 return self._send(200, {"ok": True, "relation": set_relation(b["from"], b["to"], tariff=b.get("rate", 0))})
+            # ---- mainland as an actor (§12) — influence/friction only, never a command ----
+            if p == "/admin/mainland/mood":  # {mood, pressure?}
+                if b.get("mood") not in MOODS:
+                    return self._send(400, {"error": f"mood must be one of {list(MOODS)}"})
+                return self._send(200, {"ok": True, "mainland": set_mainland_mood(b["mood"], b.get("pressure"))})
+            if p == "/admin/mainland/edict":  # {kind,text,item?,priceMultiplier?,ttlSec?}
+                if not b.get("text"):
+                    return self._send(400, {"error": "text required"})
+                add_edict(b.get("kind", "edict"), b["text"], item=b.get("item"),
+                          price_multiplier=b.get("priceMultiplier"), ttl_sec=b.get("ttlSec"), source="admin")
+                return self._send(200, {"ok": True, "mainland": get_mainland()})
+            if p == "/admin/mainland/edict/retire":  # {id}
+                if not b.get("id"):
+                    return self._send(400, {"error": "id required"})
+                retire_edict(b["id"])
+                return self._send(200, {"ok": True, "mainland": get_mainland()})
+            # ---- coordinated cross-island events (§11) ----
+            if p == "/admin/event":  # {kind,text,islands:[...]|"all",weather?,season?,ttlSec?,extra?}
+                if not b.get("kind") or not b.get("text"):
+                    return self._send(400, {"error": "kind and text required"})
+                extra = dict(b.get("extra") or {})
+                for k in ("weather", "season"):
+                    if k in b:
+                        extra[k] = b[k]
+                ev = add_event(b["kind"], b.get("islands", "all"), b["text"], extra=extra, ttl_sec=b.get("ttlSec"))
+                return self._send(200, {"ok": True, "event": ev})
+            if p == "/admin/event/retire":  # {id}
+                if not b.get("id"):
+                    return self._send(400, {"error": "id required"})
+                retire_event(b["id"])
+                return self._send(200, {"ok": True})
             return self._send(404, {"error": "not found"})
 
         # ---- island-authenticated writes ----
@@ -484,6 +814,15 @@ class H(BaseHTTPRequestHandler):
         if m:
             update_state(m.group(1), b)
             return self._send(200, {"ok": True})
+        # ---- cross-island notoriety ingestion (§14): an island reports what IT perceived.
+        # The hub never computes guilt; it only stores and aggregates what's reported. ----
+        m = re.match(r"^/people/([^/]+)/report$", p)
+        if m:
+            if not b.get("island"):
+                return self._send(400, {"error": "island required"})
+            report_person(m.group(1), b["island"], b.get("notoriety", 0), bool(b.get("fugitive")),
+                          b.get("note", ""), b.get("alias"))
+            return self._send(200, {"ok": True, "person": person_dossier(m.group(1))})
         return self._send(404, {"error": "not found"})
 
     def do_PUT(self):
@@ -506,5 +845,6 @@ class H(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     init_db()
+    threading.Thread(target=mainland_loop, daemon=True).start()
     print(f"[uw-hub] listening on :{PORT}  db={DB_PATH}  auth={'on' if SECRET else 'off'}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
