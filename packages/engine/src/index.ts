@@ -1,5 +1,5 @@
 export { Town, asksSomething } from "./engine.ts";
-export type { TownOptions, AddAgentOptions } from "./engine.ts";
+export type { TownOptions, AddAgentOptions, NudgeKind, NudgeResult, RumorNudge, StrangerNudge, WindfallNudge, WhisperNudge } from "./engine.ts";
 export type { Rule, AgentState, Brain, Tier, Place, Job, Relation, Memory, ConverseContext, ReflectContext, PlanContext, PaperContext, LifeContext, JudgeContext, DigestContext, ChildContext, ActivePlan, Budget, TownSnapshot, AgentSnapshot } from "./types.ts";
 export { Rng } from "./rng.ts";
 export { validate } from "./validator.ts";

@@ -5,8 +5,8 @@ import { recordEvolution, type EvolutionStory } from "./evolution.ts";
 import { skillId, achieved, importedSkill, type SkillMeasure } from "./skills.ts";
 import { recordPurchase, foodExperience, teachable, ADVICE_LIFETIME } from "./learning.ts";
 import { recordBuildingMoment } from "./building-history.ts";
-import type { Action, ActionProposal, AgentId, PlaceId, Perception, TownEvent, EventKind, Persona, Paper, Reflection, DayPlan, Child, Passenger } from "@unwatched/protocol";
-import { OPTIONS_DEFAULT } from "@unwatched/protocol";
+import type { Action, ActionProposal, AgentId, PlaceId, Perception, TownEvent, EventKind, Paper, Reflection, DayPlan, Child, Passenger } from "@unwatched/protocol";
+import { OPTIONS_DEFAULT, Persona } from "@unwatched/protocol";
 import { Rng } from "./rng.ts";
 import type { AgentState, Deal, Brain, Budget, EventSink, Job, Place, Tier, Memory, TownSnapshot, AgentSnapshot, DigestContext, LifeContext, Gathering, Seal, JudgeContext, Rule, TownCulture } from "./types.ts";
 import { makeJobs, makePlaces, FOOD_ITEMS, PERISHABLE, MINUTES_PER_DAY, SEASONS, BUILDS, GARDEN, WORKS, buildKind, lookHash, siteName, stockShelf, ISLAND, type WorldPack } from "./world.ts";
@@ -56,6 +56,42 @@ export interface AddAgentOptions {
   /** Marks a wealth-shock arrival: someone who lands with a fortune (paired with a large `coins`) and, rather than hoarding it, puts it to work through the island's own bank, business and hiring — a magnate dropped onto the island. */
   magnate?: boolean;
 }
+
+/**
+ * The reader's lever: influence, not command. A watcher can nudge the world — seed a rumor, send a stranger,
+ * hand someone a little luck or a little trouble, whisper a suggestion — but every nudge lands as something an
+ * agent perceives and may heed, ignore, or subvert entirely (they might fall in love instead). Nothing here ever
+ * picks an agent's action for them, bans anything, or mints a reward that isn't real coin already accounted for.
+ */
+export type NudgeKind = "rumor" | "stranger" | "windfall" | "whisper";
+export interface NudgeResult { ok: boolean; reason?: string }
+export interface RumorNudge {
+  text: string;
+  /** Who hears it first. Left unset, a handful of islanders pick it up at random, the way news off the boat already spreads. */
+  agentIds?: AgentId[];
+}
+export interface StrangerNudge {
+  persona: Persona;
+  coins?: number;
+  owner?: string | null;
+  /** Sim minutes until they step off the boat. Default is a short wait — they were already on their way, not conjured mid-harbor. */
+  delayMinutes?: number;
+}
+export interface WindfallNudge {
+  agentId: AgentId;
+  /** Positive is a windfall, negative is a hardship. Clamped either way — a nudge, never a jackpot or a ruin. */
+  amount: number;
+}
+export interface WhisperNudge { agentId: AgentId; text: string }
+
+/** How long each kind of nudge must cool down before it can be used again — globally for a world-scale nudge, per person for one aimed at somebody. Keeps the lever a nudge, not a lever pulled every minute. */
+const NUDGE_COOLDOWN: Record<NudgeKind, number> = { rumor: 6 * 60, stranger: 12 * 60, windfall: MINUTES_PER_DAY, whisper: MINUTES_PER_DAY };
+/** A windfall or hardship stays small: at most a few days' ordinary wage either way, never a fortune and never a ruin. */
+const NUDGE_WINDFALL_MAX = 12;
+const NUDGE_HARDSHIP_MAX = -8;
+/** A sent-for stranger arrives on a boat already crossing, not out of thin air on the exact minute asked. */
+const NUDGE_STRANGER_DEFAULT_DELAY = 60;
+const NUDGE_STRANGER_MAX_DELAY = MINUTES_PER_DAY;
 
 const WEATHERS = ["clear", "clear", "clear", "rain", "rain", "wind", "fog", "storm"] as const; // "snow" only ever comes from the real sky
 
@@ -179,6 +215,11 @@ export class Town {
   private eduRng!: Rng; // schooling and entrepreneurship draw from their own stream too, for the same reason
   private landRng!: Rng; // wild land — buying it and putting it to use — draws from its own stream too, for the same reason
   private diseaseRng!: Rng; // sickness draws from its own stream too, for the same reason: nightly/day-end never touches the shared rng
+  private nudgeRng!: Rng; // the reader's lever draws from its own stream too: a watcher's nudge never perturbs an otherwise-seeded sim
+  /** When each kind of nudge (and, for a person-scoped one, which person) was last used, so the lever cools down instead of becoming a steering wheel. Not persisted — a restart forgives the cooldown, the same as `arrivalsToday` and other soft daily counters already do. */
+  private nudgeLog: { kind: NudgeKind; key: string; t: number }[] = [];
+  /** Strangers sent for by a nudge, waiting on their boat. They arrive as themselves and act on nothing but their own persona from the moment they step ashore. */
+  private pendingStrangers: { atT: number; persona: Persona; coins: number; owner: string | null }[] = [];
   /** Set once an outbreak has been announced to the town, so the notice does not repeat every night it stays severe; clears once the town is clear of it again. Not persisted — at worst the record re-announces once after a restart. */
   private strickenNotified = false;
   private nextId = 1;
@@ -207,6 +248,7 @@ export class Town {
     this.rng = new Rng(opts.seed);
     this.disasterRng = new Rng((opts.seed ?? 42) + 90210);
     this.eduRng = new Rng((opts.seed ?? 42) + 130717);
+    this.nudgeRng = new Rng((opts.seed ?? 42) + 424242);
     this.landRng = new Rng((opts.seed ?? 42) + 220462);
     this.diseaseRng = new Rng((opts.seed ?? 42) + 314159);
     this.brain = opts.brain;
@@ -260,7 +302,7 @@ export class Town {
   }
   /** Let minutes pass without anyone thinking: the island catching up with the real clock after a slow stretch or a restart. */
   skip(minutes: number): void {
-    for (let i = 0; i < minutes; i++) { for (const a of this.agents.values()) this.decayNeeds(a); const prev = this.hour; this.t += 1; if (this.hour !== prev) this.hourly(); }
+    for (let i = 0; i < minutes; i++) { for (const a of this.agents.values()) this.decayNeeds(a); const prev = this.hour; this.t += 1; this.processStrangers(); if (this.hour !== prev) this.hourly(); }
     // a skip across midnight is a night the island slept through: no paper, no hunger count, but the date moves
     const d = Math.floor(this.t / MINUTES_PER_DAY) + 1; if (d !== this.day) { this.day = d; this.arrivalsToday = 0; this.departuresToday = 0; }
   }
@@ -337,6 +379,7 @@ export class Town {
     if (snap.civic) { this.mayor = snap.civic.mayor && this.agents.has(snap.civic.mayor) ? snap.civic.mayor : null; this.electedDay = snap.civic.elected; this.works = [...snap.civic.works]; this.gatherings = (snap.civic.gatherings ?? []).map((g) => ({ ...g })); this.wedded = new Set(snap.civic.wedded ?? []); this.chain = [...(snap.civic.chain ?? [])]; this.rules = [...(snap.civic.rules ?? [])]; this.sayings = [...(snap.civic.sayings ?? [])]; this.nextGatheringId = 1 + Math.max(0, ...this.gatherings.map((g) => g.id)); this.culture = snap.civic.culture ? structuredClone(snap.civic.culture) : this.culture; }
     this.nextLetterId = 1 + Math.max(0, ...[...this.agents.values()].flatMap((a) => a.letters.map((l) => l.id)));
     this.nextDealId = Math.max(snap.civic?.nextDealId ?? 1, 1 + Math.max(0, ...[...this.agents.values()].flatMap((a) => a.deals.map((d) => d.id))));
+    this.pendingStrangers = structuredClone(snap.pendingStrangers ?? []);
   }
 
   snapshot(): TownSnapshot {
@@ -353,6 +396,7 @@ export class Town {
         memory: a.memory,
       })),
       papers: this.papers.slice(-14), laws: this.laws, children: this.children.map((c) => ({ ...c })), civic: { evolution: structuredClone(this.evolution), nextDealId: this.nextDealId, mayor: this.mayor, elected: this.electedDay, works: [...this.works], gatherings: this.gatherings.filter((g) => !g.held).map((g) => ({ ...g })), wedded: [...this.wedded], chain: this.chain.slice(-400), rules: [...this.rules], sayings: this.sayings.slice(-40), culture: structuredClone(this.culture) },
+      pendingStrangers: structuredClone(this.pendingStrangers),
     };
   }
 
@@ -398,6 +442,99 @@ export class Town {
   sendLetter(agentId: AgentId, text: string): void {
     const a = this.agents.get(agentId); if (!a) return;
     a.letters.push({ id: this.nextLetterId++, text, t: this.t, read: false });
+  }
+
+  /** Whether this kind of nudge — globally, or for this one person — is off cooldown. */
+  private nudgeReady(kind: NudgeKind, key: string): boolean {
+    const last = this.nudgeLog.find((n) => n.kind === kind && n.key === key);
+    return !last || this.t - last.t >= NUDGE_COOLDOWN[kind];
+  }
+  private markNudge(kind: NudgeKind, key: string): void {
+    const row = this.nudgeLog.find((n) => n.kind === kind && n.key === key);
+    if (row) row.t = this.t; else this.nudgeLog.push({ kind, key, t: this.t });
+    if (this.nudgeLog.length > 500) this.nudgeLog.splice(0, this.nudgeLog.length - 500); // a long-running world doesn't grow this list forever
+  }
+
+  /**
+   * The reader's lever. Every kind here is influence, never command: it enters the world as something an agent can
+   * notice — a rumor they might repeat or doubt, a newcomer with their own mind, coin that changes what's easy for a
+   * day, a suggestion in a letter — and the agent's own `decide` still governs everything they do about it. Nothing
+   * is forced, nothing is banned, and coins always move through `minted`/`burned` like any other coin entering or
+   * leaving the island. Rate-limited per kind (and, for a person-scoped nudge, per person) so it stays a nudge.
+   */
+  nudge(kind: "rumor", args: RumorNudge): NudgeResult;
+  nudge(kind: "stranger", args: StrangerNudge): NudgeResult;
+  nudge(kind: "windfall", args: WindfallNudge): NudgeResult;
+  nudge(kind: "whisper", args: WhisperNudge): NudgeResult;
+  nudge(kind: NudgeKind, args: RumorNudge | StrangerNudge | WindfallNudge | WhisperNudge): NudgeResult {
+    switch (kind) {
+      case "rumor": return this.nudgeRumor(args as RumorNudge);
+      case "stranger": return this.nudgeStranger(args as StrangerNudge);
+      case "windfall": return this.nudgeWindfall(args as WindfallNudge);
+      case "whisper": return this.nudgeWhisper(args as WhisperNudge);
+    }
+  }
+  /** Seeds a rumor with a few islanders (or whoever is named): something they now know and may pass on, spreading and drifting the same way any overheard thing already does — or may simply never repeat. */
+  private nudgeRumor(args: RumorNudge): NudgeResult {
+    const text = (args.text ?? "").trim().slice(0, 280);
+    if (!text) return { ok: false, reason: "a rumor needs words" };
+    if (!this.nudgeReady("rumor", "*")) return { ok: false, reason: "a rumor is still making the rounds; let it travel before seeding another" };
+    const named = (args.agentIds ?? []).map((id) => this.agents.get(id)).filter((a): a is AgentState => !!a);
+    const targets = named.length ? named : this.nudgeRng.shuffle([...this.agents.values()]).slice(0, Math.min(3, this.agents.size));
+    if (!targets.length) return { ok: false, reason: "nobody on the island to tell it to" };
+    for (const a of targets) { a.rumors.push(text); if (a.rumors.length > 12) a.rumors.shift(); this.remember(a, `I heard: ${text}`, 0.5, "rumor"); }
+    this.markNudge("rumor", "*");
+    this.emit("town.nudge", targets.map((a) => a.id), targets[0]!.location, `A rumor started going around: "${text}"`, 0.5, { nudgeKind: "rumor", text });
+    return { ok: true };
+  }
+  /** Books passage for a newcomer, persona and all. They step off the boat on their own two feet a little later — see `processStrangers` — and from that minute on they are exactly as free as anyone else the island ever produced. */
+  private nudgeStranger(args: StrangerNudge): NudgeResult {
+    const parsed = Persona.safeParse(args.persona);
+    if (!parsed.success) return { ok: false, reason: "not a person the island would recognize" };
+    if (!this.nudgeReady("stranger", "*")) return { ok: false, reason: "a stranger is already on the water; let them land first" };
+    const coins = Math.max(0, Math.min(80, Math.round(args.coins ?? 40)));
+    const delay = Math.max(0, Math.min(NUDGE_STRANGER_MAX_DELAY, Math.round(args.delayMinutes ?? NUDGE_STRANGER_DEFAULT_DELAY)));
+    this.pendingStrangers.push({ atT: this.t + delay, persona: parsed.data, coins, owner: args.owner ?? null });
+    this.markNudge("stranger", "*");
+    return { ok: true };
+  }
+  /** A small windfall (positive) or hardship (negative), clamped and rate-limited, credited or debited like any other coin the island mints or loses — never a reward for anything the agent did or didn't do. */
+  private nudgeWindfall(args: WindfallNudge): NudgeResult {
+    const a = this.agents.get(args.agentId); if (!a) return { ok: false, reason: "no such person" };
+    const raw = Math.round(args.amount ?? 0);
+    if (!raw) return { ok: false, reason: "a windfall needs an amount" };
+    const amount = raw > 0 ? Math.min(raw, NUDGE_WINDFALL_MAX) : Math.max(raw, NUDGE_HARDSHIP_MAX);
+    if (!this.nudgeReady("windfall", a.id)) return { ok: false, reason: `${a.persona.name} had one of these too recently` };
+    if (amount < 0 && a.coins + amount < 0) return { ok: false, reason: `${a.persona.name} does not have that much to lose` };
+    a.coins += amount;
+    if (amount > 0) this.minted += amount; else this.burned += -amount; // conserved like any other coin crossing the books, never conjured or vanished off the ledger
+    this.markNudge("windfall", a.id);
+    this.remember(a, amount > 0 ? `I came into ${amount} coins I wasn't expecting.` : `I came up ${-amount} coins short, and couldn't say quite how.`, 0.4);
+    this.emit("town.nudge", [a.id], a.location, amount > 0 ? `${a.persona.name} came into a little unexpected money.` : `${a.persona.name} came up some coin short, and can't say quite how.`, 0.5, { nudgeKind: "windfall", amount });
+    return { ok: true };
+  }
+  /** A letter home, only backwards: a suggestion sent TO an agent, exactly as non-binding as the letters they already write to their own owner. It raises the one thought right after it, same as any hint the world already gives — nothing about it compels the reply. */
+  private nudgeWhisper(args: WhisperNudge): NudgeResult {
+    const a = this.agents.get(args.agentId); if (!a) return { ok: false, reason: "no such person" };
+    const text = (args.text ?? "").trim().slice(0, 600);
+    if (!text) return { ok: false, reason: "a whisper needs words" };
+    if (!this.nudgeReady("whisper", a.id)) return { ok: false, reason: `${a.persona.name} was whispered to too recently` };
+    this.sendLetter(a.id, text);
+    a.hint ??= "Something has been quietly suggested to you. It's yours to weigh, act on, ignore, or defy.";
+    this.markNudge("whisper", a.id);
+    this.emit("town.nudge", [a.id], a.location, `Something was quietly suggested to ${a.persona.name} — whether they act on it is their own affair.`, 0.5, { nudgeKind: "whisper" });
+    return { ok: true };
+  }
+  /** Strangers a nudge sent for, once their boat is finally in: they arrive exactly the way anyone else does, and nothing about how they got here binds what they do next. */
+  private processStrangers(): void {
+    if (!this.pendingStrangers.length) return;
+    const due = this.pendingStrangers.filter((p) => p.atT <= this.t);
+    if (!due.length) return;
+    this.pendingStrangers = this.pendingStrangers.filter((p) => p.atT > this.t);
+    for (const p of due) {
+      const a = this.addAgent({ persona: p.persona, owner: p.owner, funded: true, coins: p.coins });
+      this.emit("town.nudge", [a.id], "harbor", `${a.persona.name} came ashore${p.persona.cameBecause ? `, saying ${p.persona.cameBecause}` : ""} — nobody here knows them yet.`, 0.5, { nudgeKind: "stranger" });
+    }
   }
 
   // ---------- main loop ----------
@@ -507,6 +644,7 @@ export class Town {
     // conversations between co-located people
     await this.conversations();
     await this.sail();
+    this.processStrangers();
     // 5. clock
     this.t += this.minutesPerTick;
     if (this.hour !== prevHour) this.hourly();
@@ -814,10 +952,10 @@ export class Town {
         if (action.coins) { a.coins -= action.coins; b.coins += action.coins; }
         if (action.item) { a.inventory.splice(a.inventory.indexOf(action.item), 1); b.inventory.push(action.item); }
         const what = action.coins ? `${action.coins} coins` : action.item!;
-        if (action.coins) { const d = a.debts.find((x) => x.to === b.id); if (d) { d.coins -= action.coins; if (d.coins <= 0) { a.debts = a.debts.filter((x) => x !== d); this.emit("agent.debt", [a.id, b.id], here.id, `${name} paid ${b.persona.name} back in full.`, 0.5); this.remember(a, `I paid ${b.persona.name} back.`, 0.6); this.remember(b, `${name} paid me back in full.`, 0.7); this.nudge(b, a.id, +0.15, +0.05); } } }
+        if (action.coins) { const d = a.debts.find((x) => x.to === b.id); if (d) { d.coins -= action.coins; if (d.coins <= 0) { a.debts = a.debts.filter((x) => x !== d); this.emit("agent.debt", [a.id, b.id], here.id, `${name} paid ${b.persona.name} back in full.`, 0.5); this.remember(a, `I paid ${b.persona.name} back.`, 0.6); this.remember(b, `${name} paid me back in full.`, 0.7); this.trustNudge(b, a.id, +0.15, +0.05); } } }
         this.emit("agent.give", [a.id, b.id], here.id, `${name} gave ${b.persona.name} ${what}.`, 0.45);
         this.remember(a, `I gave ${b.persona.name} ${what}.`, 0.5); this.remember(b, `${name} gave me ${what}.`, 0.6);
-        this.nudge(b, a.id, +0.08, +0.05);
+        this.trustNudge(b, a.id, +0.08, +0.05);
         break;
       }
       case "take": {
@@ -827,8 +965,8 @@ export class Town {
           const seen = this.nearby(a).filter((x) => x.id !== b.id);
           this.emit("agent.take", [a.id, b.id], here.id, `${name} took ${action.item} from ${b.persona.name}.`, 0.7);
           this.remember(a, `I took ${action.item} from ${b.persona.name}.`, 0.7);
-          this.remember(b, `${name} took my ${action.item}.`, 0.9); this.nudge(b, a.id, -0.3, -0.2);
-          for (const w of seen) { this.remember(w, `I saw ${name} take ${action.item} from ${b.persona.name}.`, 0.7, "rumor"); this.nudge(w, a.id, -0.1, -0.05); }
+          this.remember(b, `${name} took my ${action.item}.`, 0.9); this.trustNudge(b, a.id, -0.3, -0.2);
+          for (const w of seen) { this.remember(w, `I saw ${name} take ${action.item} from ${b.persona.name}.`, 0.7, "rumor"); this.trustNudge(w, a.id, -0.1, -0.05); }
         } else {
           a.inventory.push(action.item);
           if (here.kind === "wild" && action.item === "timber" && equipped(a)?.name === "axe" && (here.stock.timber ?? 0) > 1 && a.inventory.length < capacity(a)) { a.inventory.push("timber"); here.stock.timber!--; wearTool(a, this.t, 10); }
@@ -840,7 +978,7 @@ export class Town {
           const owner = here.owner ? this.agents.get(here.owner) : null;
           this.emit("agent.take", [a.id, ...(owner ? [owner.id] : [])], here.id, `${name} took ${action.item} from ${here.name} without paying${owner ? `; it was ${owner.persona.name}'s` : ""}.`, 0.6);
           this.remember(a, `I took ${action.item} from ${here.name} without paying.`, 0.6);
-          for (const w of seen) { this.remember(w, `I saw ${name} take ${action.item} from ${here.name} without paying.`, 0.65, "rumor"); this.nudge(w, a.id, -0.12, -0.05); }
+          for (const w of seen) { this.remember(w, `I saw ${name} take ${action.item} from ${here.name} without paying.`, 0.65, "rumor"); this.trustNudge(w, a.id, -0.12, -0.05); }
         }
         break;
       }
@@ -943,7 +1081,7 @@ export class Town {
         if (about && secret) {
           // an exposé: by evening the whole island has read it, and the one exposed knows who wrote it
           this.emit("town.expose", [a.id, about.id], here.id, `${name} wrote “${action.title}”, and the island read it by evening: ${about.persona.name}'s secret is out. ${secret}`, 0.95, { text: action.text, about: about.id, secret });
-          for (const w of this.agents.values()) { if (w.id === a.id) continue; if (w.id === about.id) { this.remember(w, `${name} wrote “${action.title}” and now the whole island knows what nobody knew: ${secret}`, 1); this.nudge(w, a.id, -0.6, -0.5); continue; } w.secretsKnown[about.id] = secret; this.remember(w, `Read ${name}'s “${action.title}”. ${about.persona.name}'s secret: ${secret}`, 0.85, "rumor"); this.nudge(w, about.id, -0.15, -0.1); if (w.persona.traits.honesty > 0.6) this.nudge(w, a.id, -0.1, -0.05); }
+          for (const w of this.agents.values()) { if (w.id === a.id) continue; if (w.id === about.id) { this.remember(w, `${name} wrote “${action.title}” and now the whole island knows what nobody knew: ${secret}`, 1); this.trustNudge(w, a.id, -0.6, -0.5); continue; } w.secretsKnown[about.id] = secret; this.remember(w, `Read ${name}'s “${action.title}”. ${about.persona.name}'s secret: ${secret}`, 0.85, "rumor"); this.trustNudge(w, about.id, -0.15, -0.1); if (w.persona.traits.honesty > 0.6) this.trustNudge(w, a.id, -0.1, -0.05); }
         } else { this.emit("agent.say", [a.id], here.id, `${name} wrote “${action.title}”${about ? `, about ${about.persona.name}` : ""}.`, about ? 0.5 : 0.35, { text: action.text, ...(about ? { about: about.id } : {}) }); this.remember(a, `I wrote “${action.title}”${about ? `, about ${about.persona.name}` : ""}: ${action.text.slice(0, 240)}`, 0.35, "reflect"); }
         break;
       }
@@ -984,7 +1122,7 @@ export class Town {
         a.secretsKnown[b.id] = b.persona.secret;
         this.remember(a, `Went through ${b.persona.name}'s things at ${here.name} while they were out and found what nobody knows: ${b.persona.secret}`, 1);
         const seen = this.nearby(a).filter((w) => !w.asleep);
-        for (const w of seen) { this.remember(w, `I saw ${name} going through ${b.persona.name}'s things at ${here.name}.`, 0.8, "rumor"); this.nudge(w, a.id, -0.25, -0.1); }
+        for (const w of seen) { this.remember(w, `I saw ${name} going through ${b.persona.name}'s things at ${here.name}.`, 0.8, "rumor"); this.trustNudge(w, a.id, -0.25, -0.1); }
         this.emit("agent.search", [a.id, b.id], here.id, `${name} went through ${b.persona.name}'s things at ${here.name}${seen.length ? `, and ${seen.map((w) => w.persona.name).join(" and ")} saw it` : ", and nobody saw"}.`, seen.length ? 0.7 : 0.45, { who: b.id, seen: seen.map((w) => w.id) });
         break;
       }
@@ -1071,7 +1209,7 @@ export class Town {
         const d = b.debts.find((x) => x.to === a.id); if (d) { d.coins += action.coins; d.due = due; } else b.debts.push({ to: a.id, coins: action.coins, due });
         this.emit("agent.lend", [a.id, b.id], here.id, `${name} lent ${b.persona.name} ${action.coins} coins, due in ${action.days} day${action.days > 1 ? "s" : ""}.`, 0.55);
         this.remember(a, `I lent ${b.persona.name} ${action.coins} coins. Due in ${action.days} days.`, 0.75); this.remember(b, `${name} lent me ${action.coins} coins. I owe it back in ${action.days} days.`, 0.8);
-        this.nudge(b, a.id, +0.1, +0.05);
+        this.trustNudge(b, a.id, +0.1, +0.05);
         break;
       }
       case "lodge": {
@@ -1080,7 +1218,7 @@ export class Town {
         b.home = { place: home.id, nightsPaid: 30 };
         this.emit("agent.lodge", [a.id, b.id], here.id, `${name} took ${b.persona.name} in at ${home.name}.`, 0.65);
         this.remember(a, `I took ${b.persona.name} in at ${home.name}.`, 0.7); this.remember(b, `${name} took me in at ${home.name}. A roof, for now.`, 0.85);
-        this.nudge(b, a.id, +0.2, +0.15);
+        this.trustNudge(b, a.id, +0.2, +0.15);
         break;
       }
       case "fund": {
@@ -1178,8 +1316,8 @@ export class Town {
         this.remember(a, `Conversation at ${place.name}: ${transcript}`, importance, "rumor");
         this.remember(b, `My interpretation of the conversation with ${a.persona.name}: ${d.outcome.b_remember}`, 0.3 + Math.abs(d.outcome.b_trust_delta) * 2, "reflect");
         this.remember(b, `Conversation at ${place.name}: ${transcript}`, importance, "rumor");
-        this.nudge(a, b.id, d.outcome.a_trust_delta, d.outcome.a_trust_delta / 2);
-        this.nudge(b, a.id, d.outcome.b_trust_delta, d.outcome.b_trust_delta / 2);
+        this.trustNudge(a, b.id, d.outcome.a_trust_delta, d.outcome.a_trust_delta / 2);
+        this.trustNudge(b, a.id, d.outcome.b_trust_delta, d.outcome.b_trust_delta / 2);
         if (d.outcome.rumor) { const told = drift(d.outcome.rumor, () => this.rng.next()); b.rumors.push(told); if (b.rumors.length > 12) b.rumors.shift(); this.remember(b, `${a.persona.name} told me: ${told}`, 0.5, "rumor"); }
         for (const w of group) if (w !== a && w !== b && this.rng.chance(0.5)) this.remember(w, `I overheard ${a.persona.name} and ${b.persona.name} at ${place.name}.`, 0.15, "rumor");
       }
@@ -1577,7 +1715,7 @@ export class Town {
       a.illness = { sick: true, since: this.day, immuneUntil: 0 };
       this.emit("town.notice", [a.id], "harbor", `${a.persona.name} came ashore at ${this.name} already sick — whatever struck ${p.from.name} may have crossed the water with them.`, 0.65, { disease: "carried", from: p.from.id });
       this.remember(a, "I came off the boat still sick. I should rest before I am fit for anything.", 0.8);
-      for (const w of this.nearby(a)) this.nudge(w, a.id, -0.03, -0.01); // wariness of a visibly sick newcomer — leaky, not a wall: the boat still lands them
+      for (const w of this.nearby(a)) this.trustNudge(w, a.id, -0.03, -0.01); // wariness of a visibly sick newcomer — leaky, not a wall: the boat still lands them
     } else if (carried.immuneCarried) {
       a.illness = { sick: false, since: 0, immuneUntil: this.day + DISEASE_IMMUNE_DAYS };
     }
@@ -1594,7 +1732,7 @@ export class Town {
       }
     }
     // a notorious or fugitive newcomer draws wariness from whoever is on the pier to see it — the same light trust-bias the crime record already gives a convicted name
-    if (a.notoriety > 0 || a.fugitive) for (const w of this.nearby(a)) this.nudge(w, a.id, -0.05 - a.notoriety * 0.1, -0.02);
+    if (a.notoriety > 0 || a.fugitive) for (const w of this.nearby(a)) this.trustNudge(w, a.id, -0.05 - a.notoriety * 0.1, -0.02);
     return a;
   }
 
@@ -1849,7 +1987,7 @@ export class Town {
       if (j.item_lost && a.inventory.includes(j.item_lost)) a.inventory.splice(a.inventory.indexOf(j.item_lost), 1);
       const gained = j.item_gained && a.doToday <= 3 ? j.item_gained.toLowerCase().replace(/[^a-z ]/g, "").trim() : null; if (gained && a.inventory.length < capacity(a) && !recipe(gained) && !/coin|money|gold|silver/.test(gained)) a.inventory.push(gained);
       if (j.eases === "hunger") a.needs.hunger = Math.max(0, a.needs.hunger - 0.2); if (j.eases === "rest") a.needs.rest = Math.max(0, a.needs.rest - 0.2); if (j.eases === "social") a.needs.social = Math.max(0, a.needs.social - 0.3); if (j.eases === "thirst") a.needs.thirst = Math.max(0, (a.needs.thirst ?? 0.3) - 0.3);
-      for (const t of j.trust) { const who = this.resolveRef(t.who, this.nearby(a)); if (this.agents.has(who) && who !== a.id) { this.nudge(this.agents.get(who)!, a.id, t.delta, t.delta / 2); } }
+      for (const t of j.trust) { const who = this.resolveRef(t.who, this.nearby(a)); if (this.agents.has(who) && who !== a.id) { this.trustNudge(this.agents.get(who)!, a.id, t.delta, t.delta / 2); } }
       this.remember(a, `I ${what}. ${j.happened}`, 0.55);
       for (const w of this.nearby(a)) this.remember(w, `${name} ${what}. ${j.happened}`, 0.4);
       this.emit("agent.do", [a.id, ...(b ? [b.id] : [])], place.id, `${name}: ${what}. ${j.happened}${spent ? ` (${spent} coins)` : ""}${gained ? ` (now has ${gained})` : ""}`, 0.45, { what, happened: j.happened, spent, gained });
@@ -2509,9 +2647,9 @@ export class Town {
         this.wedded.add([a.id, b.id].sort().join("+"));
         // the couple feed whoever came, a coin a head, as far as their purses go; the market's till takes it
         const feast = Math.min(a.coins + b.coins, crowd.length); const fromA = Math.min(a.coins, feast); a.coins -= fromA; b.coins -= feast - fromA; const market = this.places.get("market"); if (market) market.treasury += feast;
-        for (const c of crowd) { c.needs.hunger = Math.max(0, c.needs.hunger - 0.5); c.needs.social = 0; if (c !== a && c !== b) { this.remember(c, `${a.persona.name} and ${b.persona.name} were married at ${place.name}; the town came, and there was food.`, 0.7); this.nudge(c, a.id, 0.05, 0.05); this.nudge(c, b.id, 0.05, 0.05); } }
+        for (const c of crowd) { c.needs.hunger = Math.max(0, c.needs.hunger - 0.5); c.needs.social = 0; if (c !== a && c !== b) { this.remember(c, `${a.persona.name} and ${b.persona.name} were married at ${place.name}; the town came, and there was food.`, 0.7); this.trustNudge(c, a.id, 0.05, 0.05); this.trustNudge(c, b.id, 0.05, 0.05); } }
         this.remember(a, `${b.persona.name} and I were married at ${place.name}, with ${who} of the town there.`, 1); this.remember(b, `${a.persona.name} and I were married at ${place.name}, with ${who} of the town there.`, 1);
-        this.nudge(a, b.id, 0.1, 0.1); this.nudge(b, a.id, 0.1, 0.1);
+        this.trustNudge(a, b.id, 0.1, 0.1); this.trustNudge(b, a.id, 0.1, 0.1);
         this.emit("town.gathering", g.actors, g.place, `${a.persona.name} and ${b.persona.name} were married at ${place.name}. ${who} came${feast ? `, and the couple fed them` : ""}.`, 0.95, { kind: g.kind, crowd: crowd.map((c) => c.id), held: true });
       } else if (g.kind === "funeral") {
         const book = [...this.events].reverse().find((e) => e.kind === "town.book" && e.actors[0] === g.actors[0]); const epitaph = (book?.payload as { epitaph?: string } | undefined)?.epitaph;
@@ -2527,14 +2665,14 @@ export class Town {
         const days = Math.max(2, 12 - who); const lost = Object.keys(place.stock).length ? Object.entries(place.stock).map(([k, v]) => `${v} ${k}`).join(", ") : "";
         place.brokenUntil = this.day + days; place.stock = Object.fromEntries(Object.keys(place.stock).map((k) => [k, 0]));
         const owner = place.owner ? this.agents.get(place.owner) : null;
-        for (const c of crowd) { this.remember(c, `We fought the fire at ${place.name}; ${who} of us. It will be ${days} days before it stands again.`, 0.8); for (const d of crowd) if (d !== c) this.nudge(c, d.id, 0.03, 0.02); }
+        for (const c of crowd) { this.remember(c, `We fought the fire at ${place.name}; ${who} of us. It will be ${days} days before it stands again.`, 0.8); for (const d of crowd) if (d !== c) this.trustNudge(c, d.id, 0.03, 0.02); }
         if (owner) { this.remember(owner, `${place.name} burned: ${g.note}. ${who} came with buckets. ${days} days before I can use it again${lost ? `; lost ${lost}` : ""}.`, 1); }
         for (const r of this.residentsOf(place)) if (!crowd.includes(r)) this.remember(r, `${place.name}, where I sleep, burned. I have no roof for ${days} days.`, 1);
         this.emit("town.gathering", g.actors, g.place, `The fire at ${place.name} is out. ${who} came with buckets; ${days} days before it stands again${lost ? `, and ${lost} lost to the flames` : ""}.`, 1, { kind: g.kind, crowd: crowd.map((c) => c.id), held: true, days, cause: g.note });
       } else if (g.kind === "feast") {
         const council = this.places.get("council"); const market = this.places.get("market"); const paid = council ? Math.min(council.treasury, who) : 0; if (council && market && paid) { council.treasury -= paid; market.treasury += paid; }
         const sig = this.culture.signature;
-        for (const c of crowd) { c.needs.hunger = 0; c.needs.social = 0; this.remember(c, `${g.note}: the whole town at ${place.name}, and enough for everyone.`, 0.7); for (const d of crowd) if (d !== c) this.nudge(c, d.id, 0.02, 0.02); }
+        for (const c of crowd) { c.needs.hunger = 0; c.needs.social = 0; this.remember(c, `${g.note}: the whole town at ${place.name}, and enough for everyone.`, 0.7); for (const d of crowd) if (d !== c) this.trustNudge(c, d.id, 0.02, 0.02); }
         this.emit("town.gathering", [], g.place, `${g.note}: ${who} came to ${place.name}, and everyone ate${paid ? `; the council paid ${paid} coins for it` : ""}.${sig ? ` The island's own ${sig} went round.` : ""}`, 0.95, { kind: g.kind, crowd: crowd.map((c) => c.id), held: true });
       }
     }
@@ -2550,7 +2688,7 @@ export class Town {
     if (guilt === 0) {
       const fine = a ? Math.min(a.coins, 3) : 0; if (a) { a.coins -= fine; council.treasury += fine; this.remember(a, `I accused ${b.persona.name} and the record cleared them, in front of everyone. It cost me ${fine} coins and some standing.`, 0.8); }
       this.remember(b, `${accuser} accused me before the council and the record cleared me, with the town watching.`, 0.9);
-      if (a) { const r = b.relationships.get(a.id); if (r) r.trust = Math.max(0, r.trust - 0.3); for (const w of witnesses) { this.nudge(w, a.id, -0.08, -0.02); this.remember(w, `The council cleared ${b.persona.name}; ${accuser} had accused them of "${g.note}" and paid for it.`, 0.6, "rumor"); } }
+      if (a) { const r = b.relationships.get(a.id); if (r) r.trust = Math.max(0, r.trust - 0.3); for (const w of witnesses) { this.trustNudge(w, a.id, -0.08, -0.02); this.remember(w, `The council cleared ${b.persona.name}; ${accuser} had accused them of "${g.note}" and paid for it.`, 0.6, "rumor"); } }
       this.emit("town.gathering", g.actors, g.place, `The council heard ${accuser} against ${b.persona.name} (“${g.note}”) in front of ${who}. The record shows nothing; ${accuser} pays ${fine} coins for a false accusation.`, 0.9, { kind: g.kind, verdict: "dismissed", fine, crowd: crowd.map((c) => c.id), held: true });
     } else if (b.convictions >= 1 || guilt >= 3) {
       this.noteNotoriety(b, 0.3);
@@ -2572,7 +2710,7 @@ export class Town {
       this.remember(b, `The council fined me ${fine} coins on ${accuser}'s word, in front of everyone. One more and they will put me on the boat.`, 0.95);
       if (a) { this.remember(a, `The council fined ${b.persona.name} ${fine} coins on my word.`, 0.7); const r = b.relationships.get(a.id); if (r) r.trust = Math.max(0, r.trust - 0.4); }
       // a name already notorious draws a harsher public reaction to a fresh offence than a first-timer's would
-      for (const w of witnesses) { this.nudge(w, b.id, -0.1 - priorNotoriety * 0.1, -0.05 - priorNotoriety * 0.05); this.remember(w, `The council fined ${b.persona.name} ${fine} coins for "${g.note}".`, 0.6, "rumor"); }
+      for (const w of witnesses) { this.trustNudge(w, b.id, -0.1 - priorNotoriety * 0.1, -0.05 - priorNotoriety * 0.05); this.remember(w, `The council fined ${b.persona.name} ${fine} coins for "${g.note}".`, 0.6, "rumor"); }
       this.emit("town.gathering", g.actors, g.place, `The council heard ${accuser} against ${b.persona.name} (“${g.note}”) in front of ${who}. The record shows ${guilt} offence${guilt === 1 ? "" : "s"}: fined ${fine} coins. A second conviction means the boat.`, 0.95, { kind: g.kind, verdict: "fine", fine, guilt, crowd: crowd.map((c) => c.id), held: true });
     }
   }
@@ -2692,7 +2830,7 @@ export class Town {
     if (!r) { r = { trust: 0.3, affection: 0.3, lastSeen: this.t, opinion: "", lastPlace: null }; a.relationships.set(other, r); }
     return r;
   }
-  private nudge(a: AgentState, other: AgentId, trust: number, affection: number): void {
+  private trustNudge(a: AgentState, other: AgentId, trust: number, affection: number): void {
     const r = this.rel(a, other); r.trust = clamp(r.trust + trust); r.affection = clamp(r.affection + affection); r.lastSeen = this.t;
   }
   /** A name's standing with the town, apart from the record of convictions: rises on accusation and more on a guilty verdict, fades on its own with quiet days. Crossing into notoriety is worth a word in the paper. */

@@ -722,6 +722,30 @@ app.post("/api/ops/npc-population",async c=>{
   return c.json({moved:plan.selected.length,remaining:plan.remaining});
  }finally{worldTransition=false;}
 });
+// ---- the reader's lever: an operator can nudge the world, never command it ----
+const NudgeBody = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("rumor"), text: z.string().min(1).max(280), agentIds: z.array(z.string()).max(20).optional() }),
+  z.object({ kind: z.literal("stranger"), persona: Persona, coins: z.number().optional(), owner: z.string().nullable().optional(), delayMinutes: z.number().int().min(0).optional() }),
+  z.object({ kind: z.literal("windfall"), agentId: z.string(), amount: z.number() }),
+  z.object({ kind: z.literal("whisper"), agentId: z.string(), text: z.string().min(1).max(600) }),
+]);
+app.post("/api/ops/nudge", async (c) => {
+  const body = NudgeBody.safeParse(await c.req.json().catch(() => null));
+  if (!body.success) return c.json({ error: "not a nudge the island recognizes" }, 400);
+  const data = body.data;
+  // optional fields are spread in only when present: an object literal with an explicit `key: undefined`
+  // trips up overload resolution against `nudge`'s other, differently-shaped overloads
+  let result: { ok: boolean; reason?: string };
+  switch (data.kind) {
+    case "rumor": result = town.nudge("rumor", { text: data.text, ...(data.agentIds ? { agentIds: data.agentIds } : {}) }); break;
+    case "stranger": result = town.nudge("stranger", { persona: data.persona, ...(data.coins !== undefined ? { coins: data.coins } : {}), ...(data.owner !== undefined ? { owner: data.owner } : {}), ...(data.delayMinutes !== undefined ? { delayMinutes: data.delayMinutes } : {}) }); break;
+    case "windfall": result = town.nudge("windfall", { agentId: data.agentId, amount: data.amount }); break;
+    case "whisper": result = town.nudge("whisper", { agentId: data.agentId, text: data.text }); break;
+  }
+  if (!result.ok) return c.json({ error: result.reason ?? "that nudge was refused" }, 409);
+  if (store) await store.snapshot(town).catch((err: Error) => log(`nudge snapshot failed: ${err.message}`));
+  return c.json({ ok: true });
+});
 app.get("/api/ops", async (c) => {
   c.header("Cache-Control","private, no-store");
   if (!(await opsOk(c.req.raw))) return c.json({ error: "Administrator sign-in required." }, 401);
