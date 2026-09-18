@@ -66,6 +66,8 @@ export const ActionKind = z.enum([
   "hire", "lend", "lodge", "leave",
   "fund", "accuse", "search", "do", "stock", "make", "call",
   "start_project", "contribute_project", "withdraw_project", "teach", "propose_skill", "test_skill", "practice_skill", "share_skill", "repair", "found_institution", "join_institution", "leave_institution",
+  /** The teeth a seeded purpose might use — never auto-fired, never forced: a free agent chooses these exactly as it chooses anything else, or never touches them at all. */
+  "harm", "sabotage",
 ]);
 export type ActionKind = z.infer<typeof ActionKind>;
 
@@ -151,6 +153,10 @@ export const Action = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("fund"), what: z.string().max(40) }),
   /** Bring someone before the council. The record decides: a fine, exile, or a fine for the accuser. */
   z.object({ kind: z.literal("accuse"), who: AgentRef, of: z.string().max(200) }),
+  /** Do violence to someone here. Physics, not morality: it costs them, it is witnessed, it can be accused and it can kill — the town never picks this for anyone, and a seeded purpose never forces it either. */
+  z.object({ kind: z.literal("harm"), who: AgentRef, how: z.string().trim().min(3).max(200) }),
+  /** Damage the workplace or shop you stand in. It breaks, its shelves go bare, and whoever sees it remembers who did it. */
+  z.object({ kind: z.literal("sabotage"), how: z.string().trim().min(3).max(200) }),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -230,7 +236,7 @@ export const Perception = z.object({
     /** The post they hold: where, what it pays, and the hours; null without one. */
     shift: z.object({ place: PlaceId, wage: z.number().int(), hours: z.tuple([z.number().int(), z.number().int()]) }).nullable().optional(),
     /** The needs in words, on a scale that ends in the body failing. */
-    feels: z.object({ hunger: z.string(), rest: z.string(), social: z.string(), thirst: z.string() }).optional(),
+    feels: z.object({ hunger: z.string(), rest: z.string(), social: z.string(), thirst: z.string(), purpose: z.string().optional() }).optional(),
     debts: z.array(z.object({ to: z.string(), coins: z.number().int(), overdue: z.boolean() })).optional(),
     /** Promises: yours to keep, and the ones made to you. An offered one is waiting on an answer; an open one is owed. */
     deals: z.array(z.object({ id: z.number().int(), with: z.string(), what: z.string(), coins: z.number().int(), mine: z.boolean(), state: z.enum(["offered", "open"]), due_in_days: z.number().int().nullable(), construction: z.object({ site: PlaceId, mornings: z.number().int(), done: z.number().int() }).optional() })).optional(),
@@ -251,6 +257,8 @@ export const Perception = z.object({
     skills: z.array(z.object({id:z.string(),recipe:SkillRecipe,attempts:z.number(),successes:z.number(),learned_from:z.string().optional(),trial:z.object({success:z.boolean(),accepted:z.number(),total:z.number()}).optional()})).optional(),
     owns: z.array(z.string()).optional(),
     housing: z.object({ kind: z.string(), nights_left: z.number().int() }).nullable(),
+    /** A drive seeded at arrival, felt the way any other want is felt — never a command. What it is, how strongly it presses, and toward whom or what; the mind that feels it decides everything about what, if anything, comes of it. */
+    purpose: z.object({ kind: z.enum(["agitate", "sabotage", "harm"]), intensity: z.number().min(0).max(1), target: z.string() }).optional(),
   }),
   nearby: z.array(z.object({
     agent: AgentId, name: z.string(),
@@ -299,6 +307,8 @@ export const EventKind = z.enum([
   "relation.change", "economy.price", "weather.change", "law.proposed", "law.vote", "law.passed", "law.failed",
   "deal.offered", "deal.accepted", "deal.refused", "deal.kept", "deal.broken",
   "conversation", "action.rejected", "town.notice", "town.book", "town.mayor", "town.works", "town.verdict", "town.gathering", "town.fire", "boat.cargo", "cart.leg", "agent.do", "agent.became", "town.recipe", "town.named", "town.rule", "town.saying", "agent.search", "town.expose", "law.passed", "law.failed", "agent.plan", "agent.build", "town.built", "agent.unpaid", "agent.hire", "agent.lend", "agent.lodge", "agent.debt", "agent.weak", "agent.died", "town.born", "town.of_age", "agent.inherit", "boat.news",
+  /** The seeded-purpose capstone's teeth: an act of violence, and an act of sabotage against a place. Neither ever fires on its own — an agent's own decide loop chooses them, or doesn't. */
+  "agent.harm", "agent.sabotage",
 ]);
 export type EventKind = z.infer<typeof EventKind>;
 
@@ -374,7 +384,7 @@ export type Paper = z.infer<typeof Paper>;
 export const LifeText = z.object({ title: z.string().max(90), text: z.string().max(4400), epitaph: z.string().max(140) });
 export type LifeText = z.infer<typeof LifeText>;
 
-export const OPTIONS_DEFAULT: ActionKind[] = ["move", "say", "give", "take", "use", "work", "apply", "quit", "trade", "propose", "vote", "write", "message_owner", "sleep", "wait", "do"];
+export const OPTIONS_DEFAULT: ActionKind[] = ["move", "say", "give", "take", "use", "work", "apply", "quit", "trade", "propose", "vote", "write", "message_owner", "sleep", "wait", "do", "harm"];
 /** What the town's own mind decides a free deed came to. Bounded: coins can only be spent, never made. */
 export const Judgement = z.object({
   happened: z.string().max(240),

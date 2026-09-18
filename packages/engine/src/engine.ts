@@ -9,7 +9,7 @@ import { recordBuildingMoment } from "./building-history.ts";
 import type { Action, ActionProposal, AgentId, PlaceId, Perception, TownEvent, EventKind, Paper, Reflection, DayPlan, Child, Passenger } from "@unwatched/protocol";
 import { OPTIONS_DEFAULT, Persona } from "@unwatched/protocol";
 import { Rng } from "./rng.ts";
-import type { AgentState, Deal, Brain, Budget, EventSink, Job, Place, Tier, Memory, TownSnapshot, AgentSnapshot, DigestContext, LifeContext, Gathering, Seal, JudgeContext, Rule, TownCulture, Rumor } from "./types.ts";
+import type { AgentState, Deal, Brain, Budget, EventSink, Job, Place, Tier, Memory, TownSnapshot, AgentSnapshot, DigestContext, LifeContext, Gathering, Seal, JudgeContext, Rule, TownCulture, Rumor, Purpose } from "./types.ts";
 import { makeJobs, makePlaces, FOOD_ITEMS, PERISHABLE, MINUTES_PER_DAY, SEASONS, BUILDS, GARDEN, WORKS, buildKind, lookHash, siteName, stockShelf, ISLAND, type WorldPack } from "./world.ts";
 import { retrieve, compress, age, drift, memoryForMind } from "./memory.ts";
 import { sha256, canonicalEvent } from "./hash.ts";
@@ -56,6 +56,8 @@ export interface AddAgentOptions {
   education?: number;
   /** Marks a wealth-shock arrival: someone who lands with a fortune (paired with a large `coins`) and, rather than hoarding it, puts it to work through the island's own bank, business and hiring — a magnate dropped onto the island. */
   magnate?: boolean;
+  /** A drive to seed in this arrival, felt from their very first minute — a seed, never a script. See `Purpose`. `since` is filled in with the day they actually arrive, not the day this was asked for. */
+  purpose?: { kind: Purpose["kind"]; intensity: number; target: string } | null;
 }
 
 /**
@@ -77,6 +79,13 @@ export interface StrangerNudge {
   owner?: string | null;
   /** Sim minutes until they step off the boat. Default is a short wait — they were already on their way, not conjured mid-harbor. */
   delayMinutes?: number;
+  /**
+   * Create a person, give them a purpose: a drive seeded in this newcomer before they ever set foot ashore.
+   * It is felt the moment they arrive — surfaced in perception exactly like any other want — and nothing
+   * about it forces the hand that carries it. They may pursue it, ignore it, or subvert it entirely (fall in
+   * love instead). Malformed or omitted, they simply arrive as themselves, purposeless like anyone else.
+   */
+  purpose?: { kind: "agitate" | "sabotage" | "harm"; intensity?: number; target?: string };
 }
 export interface WindfallNudge {
   agentId: AgentId;
@@ -240,7 +249,7 @@ export class Town {
   /** When each kind of nudge (and, for a person-scoped one, which person) was last used, so the lever cools down instead of becoming a steering wheel. Not persisted — a restart forgives the cooldown, the same as `arrivalsToday` and other soft daily counters already do. */
   private nudgeLog: { kind: NudgeKind; key: string; t: number }[] = [];
   /** Strangers sent for by a nudge, waiting on their boat. They arrive as themselves and act on nothing but their own persona from the moment they step ashore. */
-  private pendingStrangers: { atT: number; persona: Persona; coins: number; owner: string | null }[] = [];
+  private pendingStrangers: { atT: number; persona: Persona; coins: number; owner: string | null; purpose?: { kind: Purpose["kind"]; intensity: number; target: string } | null }[] = [];
   private rumorRng!: Rng; // gossip draws from its own stream too, for the same reason
   private nextRumorId = 1;
   private factionRng!: Rng; // whether an owner concedes to a strike draws from its own stream too, for the same reason
@@ -353,6 +362,7 @@ export class Town {
       funded: o.funded ?? true, owner: o.owner ?? null, letters: [], intentions: [],
       lastConversation: -999, lastThought: -999, heard: [], workedToday: false, rumors: [], gossip: [], appearance: null, instructions: "", brainKind: "hosted", thinkEvery: null,
       seenToday: [], trustDawn: {}, trustLog: [], lastHungerThought: -999, starvingThoughtDay: 0, debtThoughtDay: 0, gatheringThoughtId: null, replyTo: null,
+      purpose: o.purpose ? { ...o.purpose, since: this.day } : null,
     };
     const inn = this.places.get("inn")!; inn.freeBeds = Math.max(0, (inn.freeBeds ?? 0) - 1);
     this.agents.set(id, a);
@@ -392,6 +402,7 @@ export class Town {
         budget: { ...sa.state.budget }, funded: sa.funded, owner: sa.owner, letters: sa.state.letters ?? [], intentions: [...sa.state.intentions],
         itemInstances: structuredClone(sa.state.itemInstances ?? []), nextItemId: sa.state.nextItemId ?? 0, equippedItem: sa.state.equippedItem ?? null, storage: structuredClone(sa.state.storage ?? []), activity: sa.state.activity ?? null, lastFishingDay: sa.state.lastFishingDay ?? -1, deals: [...(sa.state.deals ?? [])], lastConversation: sa.state.lastConversation ?? -999, lastThought: sa.state.lastThought ?? -999, heard: [], workedToday: false, rumors: [...sa.state.rumors], gossip: structuredClone(sa.state.gossip ?? []), appearance: sa.appearance, instructions: sa.state.instructions ?? "", brainKind: sa.state.brainKind ?? "hosted", thinkEvery: sa.state.thinkEvery ?? null, plan: sa.state.plan ?? null, lastPlan: sa.state.lastPlan ?? null, debts: sa.state.debts ?? [], hint: null, crossroads: null, ownerLetterDay: 0, heading: null, starving: sa.state.starving ?? 0, roofless: sa.state.roofless ?? 0, parched: sa.state.parched ?? 0, illness: sa.state.illness ?? { sick: false, since: 0, immuneUntil: 0 }, savings: sa.state.savings ?? 0, debt: sa.state.debt ?? 0, debtPrincipal: sa.state.debtPrincipal ?? 0, magnate: sa.state.magnate ?? false, convictions: sa.state.convictions ?? 0, notoriety: sa.state.notoriety ?? 0, fugitive: sa.state.fugitive ?? false, secretsKnown: { ...(sa.state.secretsKnown ?? {}) }, seek: null, watch: [...(sa.state.watch ?? [])], selves: [...(sa.state.selves ?? [])], lastSelfDay: sa.state.lastSelfDay ?? 0, doToday: 0, projects: [...(sa.state.projects ?? [])], beliefs: [...(sa.state.beliefs ?? [])],
         seenToday: [], trustDawn: Object.fromEntries(sa.relationships.map((r) => [r.other, r.trust])), trustLog: [...(sa.state.trustLog ?? [])], lastHungerThought: sa.state.lastHungerThought ?? -999, starvingThoughtDay: sa.state.starvingThoughtDay ?? 0, debtThoughtDay: sa.state.debtThoughtDay ?? 0, gatheringThoughtId: sa.state.gatheringThoughtId ?? null, replyTo: sa.state.replyTo ?? null, parents: sa.state.parents ?? null,
+        purpose: structuredClone(sa.state.purpose ?? null),
       };
       this.agents.set(a.id, a);
       if (a.job) this.jobs.get(a.job)!.holders.push(a.id);
@@ -422,7 +433,7 @@ export class Town {
       jobs: [...this.jobs.values()].filter((j) => this.places.get(j.place)?.owner).map(({ holders: _h, ...j }) => j),
       agents: [...this.agents.values()].map((a): AgentSnapshot => ({
         id: a.id, persona: a.persona, owner: a.owner, funded: a.funded, appearance: a.appearance, arrivedAt: a.arrivedAt,
-        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), gossip: structuredClone(a.gossip), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, illness: a.illness, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60), parents: a.parents ?? null },
+        state: { itemInstances: structuredClone(a.itemInstances ?? []), nextItemId: a.nextItemId ?? 0, equippedItem: a.equippedItem ?? null, storage: structuredClone(a.storage ?? []), activity: a.activity ? {...a.activity} : null, lastFishingDay: a.lastFishingDay ?? -1, intelligence: a.intelligence, education: a.education, desires: structuredClone(a.desires ?? []), skills: structuredClone(a.skills ?? []), practice: structuredClone(a.practice ?? null), lastSkillTrialDay: a.lastSkillTrialDay ?? -1, foodAdvice: structuredClone(a.foodAdvice ?? []), foodRoutineDecisions: structuredClone(a.foodRoutineDecisions ?? []), foodLessons: structuredClone(a.foodLessons ?? []), deals: a.deals.filter((d) => d.state === "offered" || d.state === "open"), needs: a.needs, location: a.location, coins: a.coins, inventory: a.inventory, job: a.job, home: a.home, asleep: a.asleep, budget: a.budget, intentions: a.intentions, rumors: a.rumors.slice(-5), gossip: structuredClone(a.gossip), letters: a.letters.filter((l) => !l.read || (!l.answered && asksSomething(l.text))), lastConversation: a.lastConversation, lastThought: a.lastThought, instructions: a.instructions, brainKind: a.brainKind, thinkEvery: a.thinkEvery, plan: a.plan, lastPlan: a.lastPlan, replyTo: a.replyTo, lastHungerThought: a.lastHungerThought, starvingThoughtDay: a.starvingThoughtDay, debtThoughtDay: a.debtThoughtDay, gatheringThoughtId: a.gatheringThoughtId, debts: a.debts, starving: a.starving, roofless: a.roofless, parched: a.parched, illness: a.illness, savings: a.savings, debt: a.debt, debtPrincipal: a.debtPrincipal, magnate: a.magnate ?? false, convictions: a.convictions, notoriety: a.notoriety, fugitive: a.fugitive ?? false, secretsKnown: a.secretsKnown, watch: a.watch, selves: a.selves, lastSelfDay: a.lastSelfDay, projects: a.projects, beliefs: a.beliefs, trustLog: a.trustLog.slice(-60), parents: a.parents ?? null, purpose: structuredClone(a.purpose ?? null) },
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
@@ -527,7 +538,12 @@ export class Town {
     if (!this.nudgeReady("stranger", "*")) return { ok: false, reason: "a stranger is already on the water; let them land first" };
     const coins = Math.max(0, Math.min(80, Math.round(args.coins ?? 40)));
     const delay = Math.max(0, Math.min(NUDGE_STRANGER_MAX_DELAY, Math.round(args.delayMinutes ?? NUDGE_STRANGER_DEFAULT_DELAY)));
-    this.pendingStrangers.push({ atT: this.t + delay, persona: parsed.data, coins, owner: args.owner ?? null });
+    // create a person, give them a purpose: a seed, never a script — kept aside until they actually step ashore (see processStrangers), where it becomes something felt, not something obeyed
+    const purposeKinds: Purpose["kind"][] = ["agitate", "sabotage", "harm"];
+    const purpose = args.purpose && purposeKinds.includes(args.purpose.kind)
+      ? { kind: args.purpose.kind, intensity: clamp(args.purpose.intensity ?? 0.6), target: (args.purpose.target ?? "").trim().slice(0, 200) || "no one in particular" }
+      : null;
+    this.pendingStrangers.push({ atT: this.t + delay, persona: parsed.data, coins, owner: args.owner ?? null, purpose });
     this.markNudge("stranger", "*");
     return { ok: true };
   }
@@ -565,7 +581,7 @@ export class Town {
     if (!due.length) return;
     this.pendingStrangers = this.pendingStrangers.filter((p) => p.atT > this.t);
     for (const p of due) {
-      const a = this.addAgent({ persona: p.persona, owner: p.owner, funded: true, coins: p.coins });
+      const a = this.addAgent({ persona: p.persona, owner: p.owner, funded: true, coins: p.coins, purpose: p.purpose ?? null });
       this.emit("town.nudge", [a.id], "harbor", `${a.persona.name} came ashore${p.persona.cameBecause ? `, saying ${p.persona.cameBecause}` : ""} — nobody here knows them yet.`, 0.5, { nudgeKind: "stranger" });
     }
   }
@@ -706,7 +722,8 @@ export class Town {
         ...(this.learning && a.foodLessons?.length ? { learned_food: a.foodLessons.map(l => ({ place: l.place, item: l.item, ...foodExperience(a.foodLessons, l.place, l.item, this.t) })) } : {}),
         ...(this.learning && a.foodAdvice?.length ? { food_advice: a.foodAdvice.filter(x => this.t - x.sourceT <= ADVICE_LIFETIME).map(x => ({ from: x.from, name: this.agents.get(x.from)?.persona.name ?? x.from, place: x.place, item: x.item, confidence: x.confidence, source_t: x.sourceT, shared_t: x.sharedT, trust: a.relationships.get(x.from)?.trust ?? .3, ...(x.tested ? { tested: x.tested.matched } : {}) })) } : {}),
         ...(a.beliefs.length ? { believes: a.beliefs.map((b) => ({ about: b.about, belief: b.belief, confidence: Math.round(b.confidence * 100) / 100 })) } : {}),
-        ...(Object.keys(a.secretsKnown).length ? { knows: Object.entries(a.secretsKnown).map(([id, secret]) => ({ who: this.agents.get(id)?.persona.name ?? id, secret })) } : {}), },
+        ...(Object.keys(a.secretsKnown).length ? { knows: Object.entries(a.secretsKnown).map(([id, secret]) => ({ who: this.agents.get(id)?.persona.name ?? id, secret })) } : {}),
+        ...(a.purpose ? { purpose: { kind: a.purpose.kind, intensity: a.purpose.intensity, target: a.purpose.target } } : {}), },
       nearby,
       place: { loose_items: here.looseItems ?? [], id: here.id, name: here.name, kind: here.kind, for_sale: here.sells.map((s) => ({ item: s.item, price: this.price(here, s.item) })).filter((x): x is { item: string; price: number } => x.price !== null), jobs_open: this.openJobsAt(here.id).map((j) => j.id), exits: [...here.exits],
         ...(here.decorations?.length ? { decorations: structuredClone(here.decorations) } : {}),
@@ -725,7 +742,7 @@ export class Town {
       owner_letters: [...(a.instructions ? [{ id: 0, text: `Standing instructions from whoever sent you: ${a.instructions}` }] : []), ...a.letters.filter((l) => !l.read).map((l) => ({ id: l.id, text: l.text }))],
       ...(a.hint ? { hint: a.hint } : {}), ...(a.crossroads ? { crossroads: a.crossroads } : {}),
       today: a.plan?.day === this.day && a.plan.goals.length ? { mood: a.plan.mood, goals: a.plan.goals, steps: a.plan.steps } : null,
-      options: [...OPTIONS_DEFAULT, "craft", "equip", "drop", "pickup", "stow", "retrieve", "repair_tool", ...(here.kind === "harbor" && this.weather !== "storm" && a.lastFishingDay !== this.day && a.starving < 2 ? ["fish" as const] : []), ...(!here.site && (here.owner===a.id || (!here.owner && ["public","harbor","market","wild"].includes(here.kind))) && (here.decorations?.length??0)<6 ? ["decorate" as const] : []), ...(here.institution ? ["join_institution" as const,"leave_institution" as const] : here.owner===a.id ? ["found_institution" as const] : []), ...(here.brokenUntil && here.brokenUntil>this.day ? ["repair" as const] : []), ...(this.learning ? ["propose_skill" as const, ...(a.skills?.length ? ["test_skill" as const, "practice_skill" as const, "share_skill" as const] : [])] : []), ...(here.kind === "plot" && !here.site && !here.community ? ["build" as const, "start_project" as const] : []), ...(here.community ? ["contribute_project" as const, "withdraw_project" as const] : []), ...(this.learning && nearby.length && a.foodLessons?.length ? ["teach" as const] : []), ...(here.owner === a.id ? ["hire" as const] : []), ...([...this.places.values()].some((p) => p.owner === a.id && p.beds) && nearby.length ? ["lodge" as const] : []), ...(nearby.length && a.coins > 0 ? ["lend" as const] : []), ...(here.kind === "harbor" && this.boatRunning ? ["leave" as const] : []), ...(here.kind === "civic" ? ["accuse" as const, ...(this.mayor === a.id ? ["fund" as const] : [])] : []), ...(here.owner === a.id ? ["stock" as const] : []), ...((here.owner === a.id || (a.job && this.jobs.get(a.job)?.place === here.id)) && Object.keys(here.stock).length ? ["make" as const] : []), ...(here.kind !== "wild" ? ["call" as const] : []), ...(this.residentsOf(here).some((r) => r.id !== a.id) && !this.residentsOf(here).some((r) => r.id !== a.id && r.location === here.id) ? ["search" as const] : [])],
+      options: [...OPTIONS_DEFAULT, "craft", "equip", "drop", "pickup", "stow", "retrieve", "repair_tool", ...(here.kind === "harbor" && this.weather !== "storm" && a.lastFishingDay !== this.day && a.starving < 2 ? ["fish" as const] : []), ...(!here.site && (here.owner===a.id || (!here.owner && ["public","harbor","market","wild"].includes(here.kind))) && (here.decorations?.length??0)<6 ? ["decorate" as const] : []), ...(here.institution ? ["join_institution" as const,"leave_institution" as const] : here.owner===a.id ? ["found_institution" as const] : []), ...(here.brokenUntil && here.brokenUntil>this.day ? ["repair" as const] : []), ...((here.kind === "workplace" || here.kind === "shop") && !(here.brokenUntil && here.brokenUntil > this.day) ? ["sabotage" as const] : []), ...(this.learning ? ["propose_skill" as const, ...(a.skills?.length ? ["test_skill" as const, "practice_skill" as const, "share_skill" as const] : [])] : []), ...(here.kind === "plot" && !here.site && !here.community ? ["build" as const, "start_project" as const] : []), ...(here.community ? ["contribute_project" as const, "withdraw_project" as const] : []), ...(this.learning && nearby.length && a.foodLessons?.length ? ["teach" as const] : []), ...(here.owner === a.id ? ["hire" as const] : []), ...([...this.places.values()].some((p) => p.owner === a.id && p.beds) && nearby.length ? ["lodge" as const] : []), ...(nearby.length && a.coins > 0 ? ["lend" as const] : []), ...(here.kind === "harbor" && this.boatRunning ? ["leave" as const] : []), ...(here.kind === "civic" ? ["accuse" as const, ...(this.mayor === a.id ? ["fund" as const] : [])] : []), ...(here.owner === a.id ? ["stock" as const] : []), ...((here.owner === a.id || (a.job && this.jobs.get(a.job)?.place === here.id)) && Object.keys(here.stock).length ? ["make" as const] : []), ...(here.kind !== "wild" ? ["call" as const] : []), ...(this.residentsOf(here).some((r) => r.id !== a.id) && !this.residentsOf(here).some((r) => r.id !== a.id && r.location === here.id) ? ["search" as const] : [])],
       deadline_ms: 8000,
     };
   }
@@ -761,6 +778,7 @@ export class Town {
       case "accept": case "refuse": return action.from ? { ...action, from: this.resolveRef(action.from, near) } : action;
       case "settle": return action.to ? { ...action, to: this.resolveRef(action.to, near) } : action;
       case "accuse": return { ...action, who: this.resolveRef(action.who, [...this.agents.values()]) };
+      case "harm": return { ...action, who: this.resolveRef(action.who, near) };
       // asking for work without naming the post means whatever is open here, or the post whose title they used
       case "apply": { if (action.job && this.jobs.has(action.job)) return action; const here = this.openJobsAt(a.location); const named = action.job ? here.find((j) => j.title.toLowerCase().includes(action.job!.toLowerCase()) || j.id.includes(action.job!.toLowerCase())) : undefined; return { ...action, job: (named ?? here[0])?.id ?? action.job ?? "" }; }
       case "write": return action.about ? { ...action, about: this.resolveRef(action.about, [...this.agents.values()]) } : action;
@@ -1277,6 +1295,41 @@ export class Town {
         this.emit("town.verdict", [a.id, b.id], here.id, `${name} accused ${b.persona.name} before the council: “${action.of}”. The council hears it ${today ? "today" : "tomorrow"} at three, in front of the town.`, 0.6, { stage: "charge" });
         this.remember(b, `${name} has accused me before the council: "${action.of}". The hearing is ${today ? "today" : "tomorrow"} at three.`, 0.9);
         for (const w of this.nearby(a)) this.remember(w, `${name} accused ${b.persona.name} before the council: "${action.of}".`, 0.6, "rumor");
+        break;
+      }
+      case "harm": {
+        // the capability, not the verdict: the town supplies what violence would physically do, and nothing more. Whether anyone ever calls it a crime is for `accuse` and the council to decide, same as any other act.
+        const b = this.agents.get(action.who); if (!b) break;
+        const seeded = a.purpose?.kind === "harm"; // a matching seed sharpens what the blow does; an unseeded hand still lands one, just a lighter one
+        const severity = clamp(0.3 + (seeded ? a.purpose!.intensity * 0.5 : 0));
+        b.needs.rest = clamp(b.needs.rest + 0.35 + severity * 0.35);
+        b.needs.hunger = clamp(b.needs.hunger + 0.15);
+        // a body already failing can be finished off by this the same way an unroofed, hungry night already can be — physics, not a verdict
+        const lethal = severity >= 0.75 && (b.starving >= 2 || b.roofless >= 2 || b.illness.sick);
+        this.noteNotoriety(a, 0.25 + severity * 0.25);
+        const claim = `${name} attacked ${b.persona.name} at ${here.name}${lethal ? ", and they did not survive it" : ""}.`;
+        const witnesses = this.nearby(a).filter((w) => w.id !== b.id);
+        for (const w of witnesses) { this.remember(w, claim, 0.95, "rumor"); this.giveRumor(w, this.makeRumor(a, claim, 0.7 + severity * 0.2)); this.trustNudge(w, a.id, -0.2 - severity * 0.1, -0.1); }
+        this.emit("agent.harm", [a.id, b.id], here.id, claim, 0.9, { severity, lethal, how: action.how, seeded });
+        if (lethal) {
+          this.emit("agent.died", [b.id], here.id, `${b.persona.name} died at ${here.name}, of the harm ${name} did them.`, 1);
+          this.removeAgent(b.id, "died", `Killed by ${name} at ${here.name}.`);
+        } else {
+          this.remember(b, `${name} attacked me at ${here.name}: ${action.how}`, 0.95);
+        }
+        break;
+      }
+      case "sabotage": {
+        const seeded = a.purpose?.kind === "sabotage";
+        const severity = clamp(0.3 + (seeded ? a.purpose!.intensity * 0.5 : 0));
+        const days = Math.max(1, Math.round(severity * 4));
+        here.brokenUntil = this.day + days;
+        for (const k of Object.keys(here.stock)) here.stock[k] = 0;
+        this.noteNotoriety(a, 0.2 + severity * 0.2);
+        const claim = `${here.name} was sabotaged: ${action.how}. It will be ${days} day${days === 1 ? "" : "s"} before it works again.`;
+        const witnesses = this.nearby(a);
+        for (const w of witnesses) { this.remember(w, claim, 0.85, "rumor"); this.giveRumor(w, this.makeRumor(a, claim, 0.65 + severity * 0.2)); this.trustNudge(w, a.id, -0.15 - severity * 0.1, -0.05); }
+        this.emit("agent.sabotage", [a.id], here.id, claim, 0.85, { severity, days, how: action.how, seeded });
         break;
       }
       case "leave": {
@@ -2750,7 +2803,7 @@ export class Town {
     const a = this.agents.get(g.actors[0]!), b = this.agents.get(g.actors[1]!); const council = this.places.get("council")!; const place = this.places.get(g.place)!;
     if (!b) { this.emit("town.gathering", g.actors, g.place, `The hearing at ${place.name} did not happen: the accused is gone.`, 0.6, { kind: g.kind, crowd: crowd.map((c) => c.id), held: false }); return; }
     const accuser = a?.persona.name ?? "the accuser"; const since = this.t - 10 * MINUTES_PER_DAY;
-    const guilt = this.events.filter((e) => e.t >= since && e.actors[0] === b.id && (isTheft(e) || (e.kind === "agent.debt" && / still owes /.test(e.text)))).length;
+    const guilt = this.events.filter((e) => e.t >= since && e.actors[0] === b.id && (isTheft(e) || e.kind === "agent.harm" || e.kind === "agent.sabotage" || (e.kind === "agent.debt" && / still owes /.test(e.text)))).length;
     const witnesses = crowd.filter((c) => c !== a && c !== b); const who = crowd.length;
     if (guilt === 0) {
       const fine = a ? Math.min(a.coins, 3) : 0; if (a) { a.coins -= fine; council.treasury += fine; this.remember(a, `I accused ${b.persona.name} and the record cleared them, in front of everyone. It cost me ${fine} coins and some standing.`, 0.8); }
@@ -3146,14 +3199,14 @@ export class Town {
     return true;
   }
   /** The needs in words, on the scale the body keeps: a day that ends past starving counts, two count you weak, five kill. */
-  private feels(a: AgentState): { hunger: string; rest: string; social: string; thirst: string } {
+  private feels(a: AgentState): { hunger: string; rest: string; social: string; thirst: string; purpose?: string } {
     const h = a.needs.hunger, r = a.needs.rest, so = a.needs.social, th = a.needs.thirst ?? 0.3;
     const cold = this.season === "winter" && a.roofless >= 2; // in winter, three nights rough and three days hungry is the end of it, not five
     const hunger = a.starving >= 2 && cold ? `weak with hunger: ${a.starving} days without a proper meal, and another night rough in this cold can kill` : a.starving >= 2 ? `weak with hunger: ${a.starving} days without a proper meal, and five kill` : h >= 0.85 ? `starving; a day that ends like this counts against you${a.starving ? ` (${a.starving} already)` : ""}` : h >= 0.7 ? "very hungry" : h >= 0.5 ? "hungry" : h >= 0.3 ? "could eat" : "fed";
     const rest = r >= 0.85 ? "exhausted" : r >= 0.65 ? "tired" : r >= 0.4 ? "a little worn" : "rested";
     const social = so >= 0.85 ? "very lonely" : so >= 0.6 ? "lonely" : so >= 0.35 ? "could use company" : "content";
     const thirst = a.parched >= 2 ? `weak with thirst: ${a.parched} days without a proper drink` : th >= 0.85 ? "parched; a day that ends this dry counts against you" : th >= 0.7 ? "very thirsty" : th >= 0.5 ? "thirsty" : th >= 0.3 ? "could use a drink" : "watered";
-    return { hunger, rest, social, thirst };
+    return { hunger, rest, social, thirst, ...(a.purpose ? { purpose: purposeFeel(a.purpose) } : {}) };
   }
   /** The town sheet: where the people they know, and the people they saw today, are right now. Names and places, nothing more. */
   private townPeople(a: AgentState): { name: string; place: PlaceId; asleep: boolean }[] {
@@ -3192,6 +3245,14 @@ export class Town {
 
 /** A taking that counts against someone: not gathering in the wild, not one's own shelf. */
 function isTheft(e: TownEvent): boolean { return e.kind === "agent.take" && !e.payload?.forage && !e.payload?.own; }
+/** Puts a seeded purpose into words the way any other want already is — `feels()`'s hunger and loneliness are never obeyed either, they're just there to be weighed. Ends by saying, out loud, that this is exactly what it is: a pull, not a command. */
+function purposeFeel(p: Purpose): string {
+  const strong = p.intensity >= 0.6;
+  const lead = p.kind === "harm" ? (strong ? `a hard, cold pull to hurt ${p.target}` : `an unsettled, half-formed feeling toward ${p.target}`)
+    : p.kind === "sabotage" ? (strong ? `itching to see ${p.target} broken, one way or another` : `a nagging urge to make trouble for ${p.target}`)
+    : (strong ? `burning to stir up ${p.target} against how things are run` : `a restless feeling that ${p.target} deserves better, and might need pushing`);
+  return `${lead}. It's yours to act on, ignore, or turn into something else entirely.`;
+}
 
 /** A letter that wants an answer: a question, or a plain request. */
 export function asksSomething(text: string): boolean { return /\?/.test(text) || /\b(please|could you|can you|would you|will you|tell me|let me know|write (?:to )?me|write back|answer|reply|send word|i want to know|i need to know)\b/i.test(text); }

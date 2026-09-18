@@ -124,6 +124,24 @@ export interface Rumor {
   hops: number;
 }
 
+/**
+ * A drive seeded when someone arrives (a nudge sending a stranger, or given directly): what they might be
+ * pulled to do with their days here. A SEED, not a script — surfaced in `perceive()` as a felt want, exactly
+ * like hunger or loneliness already are, so the mind that carries it may pursue it, ignore it entirely, or
+ * subvert it (fall in love, reform, walk away). The engine only seeds it and provides the capability
+ * (`harm`/`sabotage` as ordinary actions); the agent's own `decide` loop is the only thing that ever acts on it.
+ */
+export interface Purpose {
+  /** "agitate": a grievance to press, felt but not organized for them (the union/faction layer already does the organizing, on its own circumstance). "sabotage": a pull to damage the place that wronged them, or that they resent. "harm": a pull toward violence against someone in particular. */
+  kind: "agitate" | "sabotage" | "harm";
+  /** How strongly it presses, 0..1. Colors how loud the feeling is and how far it might go if ever acted on — never whether it is obeyed. */
+  intensity: number;
+  /** Who or what it points toward, in a few words: a name, a trade, a grudge. Never a command, just the seed's shape. */
+  target: string;
+  /** The day this was planted, so it can be told apart from a passing whim. */
+  since: number;
+}
+
 export interface AgentState {
   itemInstances?: import("@unwatched/protocol").ItemInstance[];
   nextItemId?: number;
@@ -233,6 +251,8 @@ export interface AgentState {
   lastHungerThought: number; starvingThoughtDay: number; debtThoughtDay: number; gatheringThoughtId: number | null;
   /** The owner letter the next letter home answers, so a reply is not held to the daily cap and a letter is answered once. */
   replyTo: number | null;
+  /** A seeded drive, if one was ever planted: felt, surfaced, never forced. See `Purpose`. */
+  purpose?: Purpose | null;
 }
 
 /** A DayPlan once the engine has it: dated, each step done when they were at its place from its hour, missed when the hour went by without them. */
@@ -363,6 +383,8 @@ export interface AgentSnapshot {
     letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; illness?: AgentState["illness"]; savings?: number; debt?: number; debtPrincipal?: number; magnate?: boolean; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"]; parents?: AgentState["parents"];
     /** kept so a restart does not ask the same question twice, or forget a letter it promised to answer */
     lastPlan?: ActivePlan | null; replyTo?: number | null; lastHungerThought?: number; starvingThoughtDay?: number; debtThoughtDay?: number; gatheringThoughtId?: number | null;
+    /** A seeded drive, if one was ever planted. See `Purpose`. */
+    purpose?: Purpose | null;
   };
   relationships: { other: AgentId; trust: number; affection: number; lastSeen: number; opinion: string }[];
   memory: Memory[];
@@ -407,5 +429,5 @@ export interface TownSnapshot {
     trade?: { shortages?: string[]; partners?: Record<string, string> };
   };
   /** A stranger a nudge sent for, still on the water. Kept across a restore so a scheduled arrival isn't lost to a restart. */
-  pendingStrangers?: { atT: number; persona: Persona; coins: number; owner: string | null }[];
+  pendingStrangers?: { atT: number; persona: Persona; coins: number; owner: string | null; purpose?: { kind: Purpose["kind"]; intensity: number; target: string } | null }[];
 }
