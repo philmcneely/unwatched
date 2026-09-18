@@ -295,7 +295,7 @@ export const EventKind = z.enum([
   "town.wonder", "place.decorated", "project.proposed", "project.contributed", "project.withdrawn", "garden.harvest", "knowledge.shared",
   "agent.move", "agent.say", "agent.give", "agent.take", "agent.trade",
   "agent.work", "agent.hired", "agent.quit", "agent.fired", "agent.sleep", "agent.wake",
-  "agent.eat", "agent.rent", "agent.evicted", "agent.reflect", "agent.letter",
+  "agent.eat", "agent.rent", "agent.evicted", "agent.reflect", "agent.letter", "town.nudge",
   "relation.change", "economy.price", "weather.change", "law.proposed", "law.vote", "law.passed", "law.failed",
   "deal.offered", "deal.accepted", "deal.refused", "deal.kept", "deal.broken",
   "conversation", "action.rejected", "town.notice", "town.book", "town.mayor", "town.works", "town.verdict", "town.gathering", "town.fire", "boat.cargo", "cart.leg", "agent.do", "agent.became", "town.recipe", "town.named", "town.rule", "town.saying", "agent.search", "town.expose", "law.passed", "law.failed", "agent.plan", "agent.build", "town.built", "agent.unpaid", "agent.hire", "agent.lend", "agent.lodge", "agent.debt", "agent.weak", "agent.died", "town.born", "town.of_age", "agent.inherit", "boat.news",
