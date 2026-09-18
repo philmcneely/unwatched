@@ -419,12 +419,14 @@ app.post("/api/boat/arrive", async (c) => {
 // the boat office tells the web which sign-in it expects, so a build without the public keys can say so instead of failing at the last step
 app.get("/api/office", (c) => c.json({ signIn: sb && process.env.UW_DEV_OWNER !== "1" ? "supabase" : "dev" }));
 app.route("/api/construction", constructionRoutes(town, TOWN_NAME));
-app.get("/api/town", (c) => c.json({ ...clockOf(town), name: TOWN_NAME, id: TOWN_ID, size: town.pack.size, places: [...town.places.values()].map(placeView), laws: town.laws, children: town.children.map(childView) }));
+// what an owner reads of the island's trade: what it is built to sell, what it cannot make for itself, who it last got each import from, and any staple currently running dry off the boat
+const tradeView = () => ({ exports: town.specialties(), imports: town.tradeDependentItems(), partners: town.tradePartners, shortages: [...town.tradeShortages] });
+app.get("/api/town", (c) => c.json({ ...clockOf(town), name: TOWN_NAME, id: TOWN_ID, size: town.pack.size, places: [...town.places.values()].map(placeView), laws: town.laws, children: town.children.map(childView), trade: tradeView() }));
 /**
  * A compact self-descriptor for an optional coordinator hub (and for a spectator island-picker). The hub seam:
  * an island advertises who it is and who it boats to; it never depends on a hub to run. See docs/hub-design.md.
  */
-app.get("/api/island", (c) => c.json({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, size: PACK.size, day: town.day, weather: town.weather, population: town.agents.size, harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }));
+app.get("/api/island", (c) => c.json({ id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: SITE_URL, size: PACK.size, day: town.day, weather: town.weather, population: town.agents.size, distress: town.distressed, trade: tradeView(), harbors: HARBORS.map((h) => ({ id: h.id, name: h.name, url: h.url })) }));
 /** Children of the island who could be adopted: unowned, growing up or already grown. Adopting means writing to them; nothing more. */
 app.get("/api/children", (c) => c.json({
   growing: town.children.filter((ch) => !ch.adoptedBy).map(childView),
@@ -891,7 +893,7 @@ async function hubPost(path: string, body: unknown): Promise<void> {
 }
 // identity + topology (rarely changes); live state (day/weather/economy) for the overview map
 const registerWithHub = () => hubPost("/islands", { id: TOWN_ID, name: TOWN_NAME, pack: PACK.id, url: ISLAND_URL, size: PACK.size, harbors: HARBORS.map((h) => ({ id: h.id, url: h.url })) });
-const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, distress: town.distressed, mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
+const reportState = () => hubPost(`/islands/${encodeURIComponent(TOWN_ID)}/state`, { day: town.day, weather: town.weather, population: town.agents.size, minted: town.minted, burned: town.burned, flourShortage: town.flourShortage, distress: town.distressed, tradeShortages: [...town.tradeShortages], mayor: town.mayor ? (town.agents.get(town.mayor)?.persona.name ?? null) : null, boat: { running: town.boatRunning, held: town.boatHeld } });
 if (HUB_URL) {
   log(`registering with hub at ${HUB_URL}`);
   void registerWithHub().then(reportState);
