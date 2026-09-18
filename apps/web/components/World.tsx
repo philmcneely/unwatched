@@ -1,4 +1,5 @@
 "use client";
+import { Icon } from "./icons";
 import { BuildingInterior, hasInterior } from "./BuildingInterior";
 import { Footfall } from "./world/footfall";
 import { PlaceMemory } from "./PlaceMemory";
@@ -13,7 +14,7 @@ import { constructionStage } from "@unwatched/protocol";
 import { uiFont } from "@/lib/fonts";
 import { useEffect, useRef, useState } from "react";
 import { Application, Container, Graphics, Rectangle, Text, TextStyle } from "pixi.js";
-import { API, WS, type PublicAgent, type TownEvent, type Clock } from "@/lib/api";
+import { API, type PublicAgent, type TownEvent, type Clock } from "@/lib/api";
 import { Citizen, lookFor, aged, type Look, type Pose } from "./world/citizen";
 import { Ambience } from "./world/ambience";
 import { ProjectDetails, type CommunityView } from "./CommunityProjects";
@@ -23,7 +24,7 @@ import { Lighting, WaterFilter, Weather, Clouds, Sky, mix, type LightSource } fr
 import { Life, type Critter } from "./world/life";
 import { Post } from "./world/post";
 import { Particles } from "./world/particles";
-import { drawGround, drawRoads, segmentsOf, keepOffRoads, Wear } from "./world/terrain";
+import { drawGround, drawRoads, segmentsOf, keepOffRoads, Wear, noise } from "./world/terrain";
 import { Interior, type InteriorPerson } from "./Interior";
 import { Portrait } from "./Portrait";
 import townStyle from "./town/town.module.css";
@@ -35,7 +36,7 @@ import townStyle from "./town/town.module.css";
  */
 const C = { ...GROUND, shell: CREAM, sage: SAGE, teal: TEAL, kelp: KELP, coral: CORAL, drift: DRIFT };
 
-type PlaceView = { decorations?: Decoration[]; community?: CommunityView; hasHistory?: boolean; id: string; name: string; kind: string; exits: string[]; x: number; y: number; district: string; sprite: string; landUse?: "farm" | "park"; stock?: Record<string, number>; look?: string; owner: string | null; site: { what: string; name: string; by: string; done: number; of: number } | null; crowd: number };
+type PlaceView = { storedCount?: number; looseCount?: number; decorations?: Decoration[]; community?: CommunityView; hasHistory?: boolean; id: string; name: string; kind: string; exits: string[]; x: number; y: number; district: string; sprite: string; landUse?: "farm" | "park"; stock?: Record<string, number>; look?: string; owner: string | null; site: { what: string; name: string; by: string; done: number; of: number } | null; crowd: number };
 type TownView = Clock & { id?: string; name?: string; size: { w: number; h: number }; places: PlaceView[] };
 
 
@@ -86,10 +87,15 @@ function lookSvg(hash: string): Promise<string | null> {
 type Fig = { speed?: number; walkFacing?: "left" | "right" | "front" | "back"; id: string; g: Container; rig: Citizen; x: number; y: number; tx: number; ty: number; place: string; asleep: boolean; /** the place with their bed, if they have one */ home: string | null; mine: boolean; name: string; pose: Pose; facing: 1 | -1; weak: boolean; bench: boolean; seat?: Seat; boarding?: boolean; /** down to an animal until this tick */ react?: { until: number; ax: number; ay: number }; reactAt?: number; /** a short thing they are doing, from the record: a letter read, a meal, a greeting, an argument */ moment?: { pose: Pose; until: number; mood?: { anger?: number; surprise?: number; joy?: number } } };
 
 export type WorldSnapshot = { clock: Clock | null; feed: TownEvent[]; citizens: PublicAgent[]; ready: boolean; error: boolean };
-export function World({ mineId, onSelect, view, effects = true, observer = false, onSnapshot }: { mineId: string | null; onSelect: (a: PublicAgent | null) => void; view: "street" | "map" | "cinema"; effects?: boolean; observer?: boolean; onSnapshot?: (snapshot: WorldSnapshot) => void }) {
+export function World({ mineId, onSelect, view, effects = true, observer = false, onSnapshot, focusId, onViewChange, apiUrl = API, selectedId = null, spotlight = null }: { apiUrl?: string; mineId: string | null; onSelect: (a: PublicAgent | null) => void; view: "street" | "map" | "cinema"; effects?: boolean; observer?: boolean; focusId?: string | null; onViewChange?: (view: "street" | "map" | "cinema") => void; onSnapshot?: (snapshot: WorldSnapshot) => void; selectedId?: string | null; spotlight?: { id: number; actors: string[]; place: string | null; at: number } | null }) {
+  const viewChange = useRef(onViewChange); viewChange.current = onViewChange;
+  const focusRef = useRef(focusId); focusRef.current = focusId;
+  const selRef = useRef(selectedId); selRef.current = selectedId;
+  const spotRef = useRef(spotlight); spotRef.current = spotlight;
+  const navigateMini = useRef<((x:number,y:number)=>void) | null>(null);
   const host = useRef<HTMLDivElement>(null);
   const cameraControl = useRef<((action: "in" | "out" | "reset") => void) | null>(null);
-  const [labels, setLabels] = useState<{ id: string; name: string; x: number; y: number; mine: boolean; shown: boolean; bubble?: string }[]>([]);
+  const [labels, setLabels] = useState<{ id: string; name: string; x: number; y: number; mine: boolean; shown: boolean; activity?: string; bubble?: string }[]>([]);
   const [feed, setFeed] = useState<TownEvent[]>([]);
   const [clock, setClock] = useState<Clock | null>(null);
   const [ready, setReady] = useState(false);
@@ -103,12 +109,13 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
   const effectsRef = useRef(effects); effectsRef.current = effects;
   const hoverRef = useRef<string | null>(null);
   /** Where the day is happening: the latest moment that mattered, for the camera to follow. */
-  const cinema = useRef<{ x: number; y: number; ids: string[]; at: number } | null>(null);
+  const cinema = useRef<{ x: number; y: number; ids: string[]; at: number; text?: string } | null>(null);
   /** A scene on the street: a gathering being held, or a fire, for the camera and the music to follow. */
   const staged = useRef<{ kind: string; place: string; x: number; y: number; actors: string[]; until: number } | null>(null);
   const clockRef = useRef<Clock | null>(null);
   const ambienceRef = useRef<Ambience | null>(null);
   const [sound, setSound] = useState(false);
+  const [caption, setCaption] = useState<{ text: string; who: string } | null>(null);
   const [cleanUi, setCleanUi] = useState(false);
   const placePast = useRef<{place:string;through:number} | null>(null);
   const [placeInfo, setPlaceInfo] = useState<{ decorations?: Decoration[]; community?: CommunityView; stock?: Record<string,number>; hasHistory?: boolean; id: string; name: string; district: string; kind: string; sprite: string; owner: string | null; site: PlaceView["site"]; people: InteriorPerson[] } | null>(null);
@@ -122,7 +129,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
     let app: Application | null = null; let ws: WebSocket | null = null; let alive = true; let inited = false; let poll: ReturnType<typeof setInterval> | null = null;
     (async () => {
       const el = host.current!;
-      const townView = (await (await fetch(`${API}/api/town`, { cache: "no-store" })).json()) as TownView;
+      const townView = (await (await fetch(`${apiUrl}/api/town`, { cache: "no-store" })).json()) as TownView;
       const W = townView.size?.w ?? 3000, H = townView.size?.h ?? 1800;
       const places = new Map<string, PlaceView>(townView.places.map((p) => [p.id, p]));
       const hourParam = typeof location !== "undefined" ? new URLSearchParams(location.search).get("hour") : null; const forcedHour = hourParam === null ? NaN : Number(hourParam); // ?hour=23 previews the light without waiting for it
@@ -132,7 +139,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       const clean = typeof location !== "undefined" && new URLSearchParams(location.search).get("clean") === "1"; setCleanUi(clean); // ?clean=1: the island with nothing over it, for pictures
       const atParam = typeof location !== "undefined" ? new URLSearchParams(location.search).get("at") : null; const zoomParam = typeof location !== "undefined" ? previewZoom(new URLSearchParams(location.search).get("zoom")) : NaN;
       const parkAt = (spec: string | null) => { if (!spec) return null; const [id, dx, dy] = spec.split(","); const p = places.get(id ?? ""); return p ? { x: p.x + (Number(dx) || 0), y: p.y + (Number(dy) || 0) } : null; };
-      const parked = parkAt(atParam);
+      let parked = parkAt(atParam);
       // ?shot=1 : a deterministic whole-island frame for snapshots — the entire island centred with sea all around, camera snapped instantly (no ease), so a headless capture never catches it mid-zoom
       const shot = typeof location !== "undefined" && new URLSearchParams(location.search).get("shot") === "1";
       // a filmed move: ?to=place,dx,dy&zoomTo=1.8&over=8&delay=1 glides the camera from `at` to `to` over that many seconds, eased both ends
@@ -267,9 +274,33 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       // roads: an edge, a centre, cobbles in courses in the old town; and over them the wear, pale where feet actually go
       const segs = segmentsOf(places, OLD_TOWN); world.addChild(drawRoads(segs));
       const wear = new Wear(segs, (sg) => { const [a, b] = sg.key.split("|"); const hub = (id?: string) => id === "market" || id === "harbor" || id === "lane"; return (hub(a) ? 30 : 0) + (hub(b) ? 30 : 0) + (sg.cobbled ? 20 : 6); }); world.addChild(wear);
+      // T2: desire-lines. Where feet cross the grass off the roads, the ground wears to a pale path — a light baseline for the shortcuts near each place, deepening with real traffic.
+      const trails = new Graphics(); world.addChild(trails);
+      const trailCount = new Map<string, number>(); const roadKeys = new Set(segs.map((s) => s.key)); let trailsDirty = true;
+      const trailKey = (a: string, b: string) => [a, b].sort().join("|");
+      const trailStep = (from: string, to: string) => { if (from === to) return; const key = trailKey(from, to); if (roadKeys.has(key)) return; trailCount.set(key, (trailCount.get(key) ?? 0) + 1); trailsDirty = true; };
+      { const list = [...places.values()].filter((p) => p.kind !== "wild" && p.kind !== "plot"); for (const p of list) { let best: { id: string; d: number } | null = null; for (const q of list) { if (q.id === p.id) continue; if (roadKeys.has(trailKey(p.id, q.id))) continue; const dd = Math.hypot(p.x - q.x, p.y - q.y); if (dd < 360 && (!best || dd < best.d)) best = { id: q.id, d: dd }; } if (best) { const key = trailKey(p.id, best.id); trailCount.set(key, Math.max(trailCount.get(key) ?? 0, 2)); } } }
+      const trailPath = (ax: number, ay: number, bx: number, by: number) => { const L = Math.hypot(bx - ax, by - ay) || 1; const n = Math.max(2, Math.round(L / 40)); const nx = -(by - ay) / L, ny = (bx - ax) / L; trails.moveTo(ax, ay); for (let i = 1; i <= n; i++) { const t = i / n; const off = i === n ? 0 : (noise(ax * 0.01 + t * 6, ay * 0.01 + 3) - 0.5) * 12; trails.lineTo(ax + (bx - ax) * t + nx * off, ay + (by - ay) * t + ny * off); } };
+      const drawTrail = (ax: number, ay: number, bx: number, by: number, width: number, alpha: number) => { trailPath(ax, ay, bx, by); trails.stroke({ width, color: 0xccb890, alpha: alpha * 0.6, cap: "round", join: "round" }); trailPath(ax, ay, bx, by); trails.stroke({ width: width * 0.5, color: 0xbba475, alpha, cap: "round", join: "round" }); };
+      const redrawTrails = () => { if (!trailsDirty) return; trailsDirty = false; trails.clear(); for (const [key, n] of trailCount) { if (n < 2) continue; const [a, b] = key.split("|") as [string, string]; const pa = places.get(a), pb = places.get(b); if (!pa || !pb) continue; const k = Math.min(1, Math.log2(1 + n) / 6); drawTrail(pa.x, pa.y + 22, pb.x, pb.y + 22, 6 + 11 * k, 0.13 + 0.15 * k); } };
+      redrawTrails();
       const harborSurface=harborGround(places.values(),inside);world.addChild(harborSurface.root);
       // the water's edge, alive: foam that breathes along the shore, whitecaps in wind and storm, rings where the rain hits
-      const shoreLine = outline(1.012), shoreOut = outline(1.05); const foam = new Graphics(); world.addChild(foam);
+      const shoreLine = outline(1.012), shoreOut = outline(1.05); const tideMid = outline(1.0), tideIn = outline(0.984); const shallowLine = outline(1.03);
+      const tide = new Graphics(); world.addChild(tide); // the wet sand the sea washes over, and light on the shallows, both under the white foam edge
+      const foam = new Graphics(); world.addChild(foam);
+      const tlerp = (p: [number, number], q: [number, number], f: number): [number, number] => [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+      const drawTide = (t: number) => {
+        tide.clear();
+        for (let k = 0; k < tideMid.length; k++) {
+          const wet = Math.max(0, Math.sin(t / 30 + k * 0.35)); if (wet < 0.05) continue; // in step with the foam, so the wet reaches where the wave breaks
+          const a = tideMid[k]!, b = tideMid[(k + 1) % tideMid.length]!, ia = tideIn[k]!, ib = tideIn[(k + 1) % tideIn.length]!;
+          const wa = tlerp(a, ia, 0.3 + wet * 0.7), wb = tlerp(b, ib, 0.3 + wet * 0.7);
+          tide.moveTo(a[0], a[1]).lineTo(b[0], b[1]).lineTo(wb[0], wb[1]).lineTo(wa[0], wa[1]).closePath().fill({ color: C.wetSand, alpha: 0.3 * wet });
+        }
+        // caustics: a soft moving glint on the shallow water just off the sand
+        for (let k = 0; k < shallowLine.length; k += 3) { const ph = Math.sin(t / 20 + k * 0.7); if (ph < 0.45) continue; const a = shallowLine[k]!, b = shallowLine[(k + 1) % shallowLine.length]!; tide.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: 2, color: C.foam, alpha: 0.14 * (ph - 0.45), cap: "round" }); }
+      };
       const seaLife = new Graphics(); world.addChild(seaLife);
       const coastalLife = new CoastalLife((a, r) => ({ x: cx + Rx * wobble(a) * r * Math.cos(a), y: cy + Ry * wobble(a) * r * Math.sin(a) }), inside);
       world.addChild(coastalLife.root);
@@ -284,23 +315,49 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       const scene = new Container(); scene.sortableChildren = true; world.addChild(scene);
       // everything standing on the ground is drawn in code, in one projection, at its natural size; props may be scaled
       const shadows = new Graphics(); shadows.zIndex = 0.5; scene.addChild(shadows);
+      // the ring under a selected person, and the pulse that marks the actors of a picked event
+      const emphasis = new Graphics(); emphasis.zIndex = 0.55; scene.addChild(emphasis);
+      const pulses = new Map<string, number>();
       const shadowSpecs: { x: number; y: number; w: number }[] = [];
+      // trees and bushes are replanted each season, so their sun-cast specs live apart and are rebuilt, never piled up
+      const treeSpecs: { x: number; y: number; w: number }[] = [];
       // shadows sit under things at noon and lean away from the sun: long to the west in the morning, long to the east in the evening, warm when the sun is low.
       // Each is a pool at the foot and a cast from the walls, so buildings and trees read as standing in one light.
       const redrawShadows = (elev: number, dir: number, low: number) => {
         shadows.clear(); const L = 0.12 + Math.pow(1 - elev, 2) * 0.9; const color = low > 0.05 ? LIGHT.lowSunShadow : C.kelp; const a = 0.08 + low * 0.05;
-        for (const sp of shadowSpecs) {
+        for (const sp of [...shadowSpecs, ...treeSpecs]) {
           const rx = sp.w * 0.5, ry = Math.max(6, sp.w * 0.16), bx = sp.x + sp.w * 0.12, by = sp.y + 4; const len = sp.w * L * 0.7;
           shadows.moveTo(bx - rx * 0.75, by).lineTo(bx + rx * 0.75, by).lineTo(bx + rx * 0.75 + dir * len, by - len * 0.22).lineTo(bx - rx * 0.75 + dir * len, by - len * 0.22).closePath().fill({ color, alpha: a * 0.8 });
           shadows.ellipse(bx + dir * len, by - len * 0.22, rx * 0.75, ry * 0.8).fill({ color, alpha: a * 0.8 });
           shadows.ellipse(bx, by, rx, ry).fill({ color, alpha: a });
+          // a tighter, darker core where the thing meets the ground, so buildings and trees sit rather than float
+          shadows.ellipse(bx, by, rx * 0.5, ry * 0.55).fill({ color, alpha: a * 0.7 });
         }
       };
       const shadowUnder = (x: number, y: number, w: number) => { if (w < 30) return; shadowSpecs.push({ x, y, w }); shadows.ellipse(x + w * 0.12, y + 4, w * 0.5, Math.max(6, w * 0.16)).fill({ color: C.kelp, alpha: 0.09 }); };
+      // each natural thing varies a little by where it stands, so a wood or a shore of one drawing never reads as clones; stable per position, so it does not jump between seasons
+      const ORGANIC = /^(tree-small|tree-large|bush|olive|cypress|rock|searocks)$/;
+      const vhash = (x: number, y: number, s: number) => { const h = Math.sin(x * 12.9898 + y * 78.233 + s * 37.719) * 43758.5453; return h - Math.floor(h); };
+      const VARY_TINTS = [0xffffff, 0xf3eede, 0xebf0e3, 0xf8f1e2, 0xe6ede0, 0xfcf6e9];
+      // ordinary houses come from a handful of drawings; a faint per-building shade keeps a row from reading as identical. Landmarks (council, mill, chapel, lighthouse) stay canonical.
+      const BUILDING = /^(house|cottage|shop|inn|tavern|bakery|chandlery|harbor-office|smithy|fishhouse|boatshed)\d*$/;
+      const BLD_TINTS = [0xffffff, 0xf7f3ea, 0xf2f2ee, 0xfbf5ec, 0xeef0ee, 0xf9f4e6];
+      // roughly where the roof of each building sits above its foot, shared by the golden-hour roof light and the foundation moss
+      const ROOF_Y: Record<string, number> = { house: -150, cottage: -120, shop: -150, inn: -195, tavern: -150, bakery: -155, chandlery: -155, "harbor-office": -140, smithy: -130, fishhouse: -115, boatshed: -115, council: -195, mill: -165, chapel: -165, lighthouse: -225 };
+      // the common houses come in a few colour-and-roof variants in the atlas; each building keeps the same one by its position
+      const VARIANTS_OF: Record<string, string[]> = { house: ["house", "house2", "house3"], cottage: ["cottage", "cottage2", "cottage3"], shop: ["shop", "shop2", "shop3"] };
+      const bldVariant = (sprite: string, x: number, y: number) => { const v = VARIANTS_OF[sprite]; return v ? v[Math.floor(vhash(x, y, 13) * v.length)]! : sprite; };
+      const mulTint = (a: number, f: number) => (Math.round(((a >> 16) & 255) * ((f >> 16) & 255) / 255) << 16) | (Math.round(((a >> 8) & 255) * ((f >> 8) & 255) / 255) << 8) | Math.round((a & 255) * (f & 255) / 255);
       const put = (name: string, x: number, y: number, w?: number, flip = false) => {
         const d = drawThing(name); if (!d) return null;
         const c = d.c; if (w) c.scale.set(w / d.w); if (flip) c.scale.x *= -1; c.position.set(x, y); c.zIndex = y; scene.addChild(c);
-        if (!/^(lamp|fence|field|pier|tree-small|tree-large|bush)$/.test(name)) shadowUnder(x, y, w ?? d.w);
+        if (ORGANIC.test(name)) {
+          const s = 0.87 + vhash(x, y, 1) * 0.26; c.scale.x *= s; c.scale.y *= s;
+          const t = VARY_TINTS[Math.floor(vhash(x, y, 2) * VARY_TINTS.length)] ?? 0xffffff;
+          for (const ch of c.children) if ("tint" in ch) (ch as { tint: number }).tint = mulTint((ch as { tint: number }).tint, t);
+          if (/rock|searocks/.test(name)) c.rotation = (vhash(x, y, 3) - 0.5) * 0.16;
+        }
+        if (!/^(lamp|fence|field|pier|tree-small|tree-large|bush|olive|cypress)$/.test(name)) shadowUnder(x, y, w ?? d.w);
         return c;
       };
       // a place's name on the ground: ink with a paper edge, so it reads on sand, grass, stone and in the dark alike
@@ -312,7 +369,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       const drawPlace = (p: PlaceView) => {
         drawn.get(p.id)?.destroy({ children: true });
         const g = new Container(); g.sortableChildren = true; g.zIndex = p.y; scene.addChild(g); drawn.set(p.id, g);
-        const local = (name: string, w?: number) => { const d=drawThing(name);if(!d)return null;const s=d.c;if(w)s.scale.set(w/d.w);s.zIndex=0;g.addChild(s);shadowUnder(p.x,p.y,w??d.w);return s; };
+        const local = (name: string, w?: number) => { const d=drawThing(name);if(!d)return null;const s=d.c;if(w)s.scale.set(w/d.w);s.zIndex=0;g.addChild(s);shadowUnder(p.x,p.y,w??d.w); if(BUILDING.test(name)){const t=BLD_TINTS[Math.floor(vhash(p.x,p.y,5)*BLD_TINTS.length)]??0xffffff;for(const ch of s.children)if("tint" in ch)(ch as {tint:number}).tint=mulTint((ch as {tint:number}).tint,t);} return s; };
         if (p.kind === "plot" && !p.site) {
           // pegged-out land: a dashed rectangle and four stakes
           const r = new Graphics(); r.rect(-80, -60, 160, 70).fill({ color: C.sage, alpha: 0.3 });
@@ -342,7 +399,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           const t = new Text({ text: `${p.site.name} · ${p.site.done} of ${p.site.of}`, style: smallStyle }); t.anchor.set(0.5, 0); t.position.set(0, 6); g.addChild(t);
         } else if (p.sprite.startsWith("look:")) {
           // a building someone described: the plain kind stands in until the island's drawing of it arrives
-          const stand = local(p.kind === "shop" ? "shop" : "house");
+          const stand = local(bldVariant(p.kind === "shop" ? "shop" : "house", p.x, p.y));
           void lookSvg(p.sprite.slice(5)).then((svg) => { if (!svg || g.destroyed) return; const d = new Graphics(); try { d.svg(svg); } catch { return; } const b = d.getLocalBounds(); if (b.width < 1) return; const target = p.kind === "shop" ? 120 : 104; const sc = target / b.width; d.scale.set(sc); d.position.set(-(b.x + b.width / 2) * sc, -(b.y + b.height) * sc); d.zIndex = 0; stand?.destroy(); g.addChild(d); });
         } else {
           if (p.kind === "wild") {
@@ -374,13 +431,24 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
               if (rnd() < 0.6) wput("bush", rnd() * 40 - 20, -4 + rnd() * 10, rnd() < 0.5);
             }
           } else {
-            local(p.sprite);
+            local(bldVariant(p.sprite, p.x, p.y));
+            // #3: moss and lichen creep up the foot of a building, a little on every one and more on some, so the stone reads as lived-in and aged
+            if (ROOF_Y[p.sprite] !== undefined) { const moss = new Graphics(); const n = 8 + Math.floor(vhash(p.x, p.y, 7) * 11); for (let i = 0; i < n; i++) { const mx = -54 + vhash(p.x + i, p.y, 8) * 108, mz = vhash(p.x, p.y + i, 9) * 30; moss.ellipse(mx, -mz, 3.5 + vhash(i, p.y, 10) * 5, 2.2 + vhash(i, p.x, 11) * 3).fill({ color: i % 3 ? 0x6f8158 : 0x8a9470, alpha: 0.2 + vhash(i, i + 3, 12) * 0.16 }); } moss.zIndex = 0.3; g.addChild(moss); }
           }
           if (p.stock) { const st = drawStock(p.sprite, p.stock); if (st) { st.zIndex = 1; g.addChild(st); } }
           // the shelf is bare: a board leans by the door until the cart or the work fills it again
           if (p.stock && (p.kind === "shop" || p.kind === "workplace" || p.kind === "market") && Object.values(p.stock).every((v) => v <= 0)) { const sg = drawSign("nothing left"); sg.position.set(-58, -10); sg.zIndex = 2; g.addChild(sg); const st = new Text({ text: "Sold out", style: { ...smallStyle, fontSize: 7, stroke: { color: 0xeee3cc, width: 0 } } }); st.anchor.set(0.5, 0.5); st.position.set(-58, -33); st.zIndex = 3; g.addChild(st); }
           // owned: the owner's name on a board by the door
           if (p.owner && p.kind !== "plot") { const nb = new Graphics(); nb.roundRect(-30, -12, 60, 11, 2).fill(C.shell).stroke({ width: 1.2, color: C.kelp }); nb.position.set(48, -6); nb.zIndex = 2; g.addChild(nb); const nt = new Text({ text: p.owner.split(" ").slice(-1)[0]!.toUpperCase(), style: { ...smallStyle, fontSize: 7 } }); nt.anchor.set(0.5, 0.5); nt.position.set(48, -12.5); nt.zIndex = 3; g.addChild(nt); }
+        }
+        const possessions = (p.storedCount ?? 0) + (p.looseCount ?? 0);
+        if (possessions > 0) {
+          const chest = new Graphics();
+          for (let i=0;i<Math.min(3,Math.ceil(possessions/4));i++) {
+            chest.roundRect(55+i*15,5-i*5,22,15,2).fill(0xb28e63).stroke({width:1,color:C.kelp});
+            chest.moveTo(56+i*15,10-i*5).lineTo(76+i*15,10-i*5).stroke({width:1,color:C.kelp,alpha:.5});
+          }
+          chest.zIndex=3;g.addChild(chest);
         }
         const t = new Text({ text: p.name.replace(/^the /, "").replace(/^an? /, "").toUpperCase(), style: nameStyle }); t.anchor.set(0.5, 0); t.position.set(0, p.site ? 22 : 6); t.zIndex = 100000; g.addChild(t);
         const marks = drawPlaceMarks(p.decorations ?? [], i=>markPosition(i,p,{x:cx,y:cy},inside)); g.addChild(marks); drawnMarks.set(p.id, marks);
@@ -479,8 +547,9 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       }
       let trees: Container[] = [];
       const plantTrees = () => {
+        treeSpecs.length = 0; // rebuilt from scratch each replant, so season changes never pile shadows up
         for (const t of trees) t.destroy({ children: true }); trees = [];
-        for (const d of decor) { if (!/tree|bush|olive|cypress/.test(d.sprite)) continue; if (inside(d.x, d.y) > 0.98) continue; /* vegetation only on land, never in the sea */ const sp = put(d.sprite, d.x, d.y, d.w, d.flip); if (!sp) continue; const sh = new Graphics(); sh.ellipse(d.w ? d.w * 0.12 : 8, 3, d.sprite === "tree-large" ? 40 : d.sprite === "bush" ? 12 : 26, d.sprite === "tree-large" ? 12 : d.sprite === "bush" ? 4 : 8).fill({ color: C.kelp, alpha: 0.09 }); sp.addChildAt(sh, 0); trees.push(sp); }
+        for (const d of decor) { if (!/tree|bush|olive|cypress/.test(d.sprite)) continue; if (inside(d.x, d.y) > 0.98) continue; /* vegetation only on land, never in the sea */ const sp = put(d.sprite, d.x, d.y, d.w, d.flip); if (!sp) continue; const sw = sp.width; if (sw >= 30) treeSpecs.push({ x: sp.x, y: sp.y, w: sw }); const sh = new Graphics(); sh.ellipse(d.w ? d.w * 0.12 : 8, 3, d.sprite === "tree-large" ? 40 : d.sprite === "bush" ? 12 : 26, d.sprite === "tree-large" ? 12 : d.sprite === "bush" ? 4 : 8).fill({ color: C.kelp, alpha: 0.09 }); sp.addChildAt(sh, 0); trees.push(sp); }
       };
       setSeason(forcedSeason ?? clockRef.current?.season ?? townView.season ?? "summer");
       for (const d of decor) { if (/tree|bush|olive|cypress/.test(d.sprite)) continue; const shoreOk = /pier|rowboat|searocks|net|crates|barrel|rock/.test(d.sprite); if (!shoreOk && inside(d.x, d.y) > 1.0) continue; /* land props stay on land; only shore props may sit at the water */ put(d.sprite, d.x, d.y, d.w, d.flip); }
@@ -500,6 +569,8 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       const wake = new Graphics(); wake.zIndex = 0.6; scene.addChild(wake);
       const aboard: Container[] = []; // figures riding the boat, parented to it
       const gulls = new Graphics(); gulls.zIndex = 180000; scene.addChild(gulls);
+      const rays = new Graphics(); rays.zIndex = 148000; rays.blendMode = "add"; scene.addChild(rays); // soft light shafts through the pinewood at dawn and dusk; additive, so they glow where they cross shade and vanish over the brightest sand
+      const roofGlow = new Graphics(); roofGlow.zIndex = 155000; roofGlow.blendMode = "add"; scene.addChild(roofGlow); // the low sun catching the upper walls and roofs on the side it stands
       const CHIMNEYS: Record<string, [number, number]> = { smithy: [44, -150], bakery: [30, -180], inn: [60, -210], mill: [0, -220], tavern: [40, -150], fishhouse: [30, -120] };
       const litHearths = new Set<string>();
       const HEARTHS: Record<string, [number, number]> = { inn: [60, -210], tavern: [40, -150], chandlery: [30, -150], boatshed: [20, -120], council: [50, -190] }; // where a fire is kept for the people inside, not the work
@@ -605,13 +676,19 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           f = { id: a.id, g, rig, x: sp.x, y: sp.y, tx: sp.x, ty: sp.y, place: a.location, asleep: a.asleep, home: a.home ?? null, mine: a.id === mineId, name: a.name, pose: a.pose ?? (a.asleep ? "sleep" : "idle"), facing: 1, weak: !!a.weak, bench: false };
           figs.current.set(a.id, f);
         } else { f.asleep = a.asleep; f.home = a.home ?? null; f.weak = !!a.weak; f.rig.wear({ broke: !!a.broke, roof: !!a.roof, roofless: !!a.roofless }); f.pose = a.pose ?? (a.asleep ? "sleep" : "idle"); f.rig.trade(a.job); f.rig.hold(a.carrying ?? null); f.rig.age(a.age); if (a.location !== f.place) moveTo(a.id, a.location); }
+        // Fishing is placed at the actual pier, only while the server confirms the attempt.
+        if (a.activity?.kind === "fish" && a.activity.place === a.location && a.activity.until > (clockRef.current?.t ?? 0) && !a.asleep) {
+          releaseSeat(f);
+          const pier = decor.find(d => d.sprite === "pier");
+          if (pier) { const slot = [...agents.current.values()].filter(p => p.activity?.kind === "fish").findIndex(p => p.id === a.id); f.tx = pier.x - 70 + Math.max(0, slot) * 24; f.ty = pier.y + 16; f.facing = -1; }
+        }
         // someone idle where there is a bench takes it
         if (f.seat && (f.asleep || !["idle","sit","talk","eat","drink","read"].includes(f.pose))) releaseSeat(f);
-        if (!f.asleep && ["idle","sit","eat","drink"].includes(f.pose) && !f.bench) { const b = benchAt(f.place); if (b && !takenBenches.has(b.key)) { takenBenches.add(b.key); f.bench = true; f.seat=b; f.tx = b.x; f.ty = b.y; } }
+        if (!f.asleep && a.activity?.kind !== "fish" && ["idle","sit","eat","drink"].includes(f.pose) && !f.bench) { const b = benchAt(f.place); if (b && !takenBenches.has(b.key)) { takenBenches.add(b.key); f.bench = true; f.seat=b; f.tx = b.x; f.ty = b.y; } }
         return f;
       };
-      const moveTo = (id: string, place: string) => { const f = figs.current.get(id); if (!f) return; releaseSeat(f); const seat = seatOf.current.get(place) ?? 0; seatOf.current.set(place, (seat + 1) % 10); const sp = spot(place, seat); if (f.place && f.place !== place) wear.step(f.place, place); f.tx = sp.x; f.ty = sp.y; f.place = place; const a = agents.current.get(id); if (a) { a.location = place; a.place = places.get(place)?.name ?? place; } };
-      const refreshPlaces = async () => { try { const t = (await (await fetch(`${API}/api/town`, { cache: "no-store" })).json()) as TownView; for (const p of t.places) { const old = places.get(p.id); places.set(p.id, p); if (!old || old.kind !== p.kind || old.name !== p.name || old.landUse !== p.landUse || JSON.stringify(old.decorations) !== JSON.stringify(p.decorations) || JSON.stringify(old.community) !== JSON.stringify(p.community) || JSON.stringify(old.site) !== JSON.stringify(p.site) || JSON.stringify(old.stock) !== JSON.stringify(p.stock)) drawPlace(p); } setPlaceInfo(info => { const p = info ? places.get(info.id) : null; return info && p ? { ...info, decorations:p.decorations, community: p.community, stock: p.stock, site: p.site, kind: p.kind, sprite: p.sprite, name: p.name, hasHistory: p.hasHistory } : info; }); } catch {} };
+      const moveTo = (id: string, place: string) => { const f = figs.current.get(id); if (!f) return; releaseSeat(f); const seat = seatOf.current.get(place) ?? 0; seatOf.current.set(place, (seat + 1) % 10); const sp = spot(place, seat); if (f.place && f.place !== place) { wear.step(f.place, place); trailStep(f.place, place); } f.tx = sp.x; f.ty = sp.y; f.place = place; const a = agents.current.get(id); if (a) { a.location = place; a.place = places.get(place)?.name ?? place; } };
+      const refreshPlaces = async () => { try { const t = (await (await fetch(`${apiUrl}/api/town`, { cache: "no-store" })).json()) as TownView; for (const p of t.places) { const old = places.get(p.id); places.set(p.id, p); if (!old || old.kind !== p.kind || old.name !== p.name || old.landUse !== p.landUse || JSON.stringify(old.decorations) !== JSON.stringify(p.decorations) || JSON.stringify(old.community) !== JSON.stringify(p.community) || JSON.stringify(old.site) !== JSON.stringify(p.site) || JSON.stringify(old.stock) !== JSON.stringify(p.stock) || old.storedCount !== p.storedCount || old.looseCount !== p.looseCount) drawPlace(p); } setPlaceInfo(info => { const p = info ? places.get(info.id) : null; return info && p ? { ...info, decorations:p.decorations, community: p.community, stock: p.stock, site: p.site, kind: p.kind, sprite: p.sprite, name: p.name, hasHistory: p.hasHistory } : info; }); } catch {} };
 
       // Full population snapshots are authoritative, including citizens who were moved off island.
       const syncPopulation = (list: PublicAgent[]) => {
@@ -629,8 +706,8 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         setPlaceInfo(info=>info?{...info,people:list.filter(a=>a.location===info.id).map(a=>({id:a.id,name:a.name,asleep:a.asleep,job:a.job,appearance:a.appearance,age:a.age,carrying:a.carrying,pose:a.pose}))}:info);
         if (removed) setFeed(feed => [...feed]);
       };
-      poll = setInterval(() => { void fetch(`${API}/api/agents`, { cache: "no-store" }).then((r) => r.json()).then((list: PublicAgent[]) => syncPopulation(list)).catch(() => {}); void refreshPlaces(); }, 30000);
-      ws = new WebSocket(WS);
+      poll = setInterval(() => { void fetch(`${apiUrl}/api/agents`, { cache: "no-store" }).then((r) => r.json()).then((list: PublicAgent[]) => syncPopulation(list)).catch(() => {}); void refreshPlaces(); }, 30000);
+      ws = new WebSocket(apiUrl.replace(/^http/, "ws") + "/stream");
       ws.onmessage = (m) => {
         const msg = JSON.parse(m.data as string) as { type: string; agents?: PublicAgent[]; recent?: TownEvent[]; event?: TownEvent; clock?: Clock };
         if (msg.type === "hello") { if(msg.agents)syncPopulation(msg.agents); setFeed((msg.recent ?? []).filter((e) => e.importance >= 0.1 && e.kind !== "agent.move").slice(-12).reverse()); if (msg.clock) { setClock(msg.clock); clockRef.current = msg.clock; } setReady(true); }
@@ -638,6 +715,14 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         if (msg.type === "event" && msg.event) {
           const e = msg.event;
           const eventActor=agents.current.get(e.actors[0]!);
+          if (eventActor && (e.kind === "agent.fishing" || e.kind === "agent.activity")) {
+            const activity = (e.payload as {activity?: PublicAgent["activity"]} | undefined)?.activity;
+            ensure({...eventActor, activity: activity ?? null, pose: activity?.kind === "work" ? "work" : "idle"});
+          }
+          if (eventActor && e.kind === "agent.fishing-ended") {
+            const caught = (e.payload as {caught?: number} | undefined)?.caught;
+            ensure({...eventActor, activity: null, pose: "idle", ...(caught ? {carrying: "fish"} : {})});
+          }
           if(eventActor && e.kind==="agent.sleep"){eventActor.asleep=true;eventActor.pose="sleep";}
           if(eventActor && e.kind==="agent.wake"){eventActor.asleep=false;eventActor.pose="idle";}
           if(["agent.move","agent.sleep","agent.wake","agent.work"].includes(e.kind)) setPlaceInfo(info=>{
@@ -646,7 +731,8 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
             return {...info,people:list.filter(a=>a.location===info.id).map(a=>({id:a.id,name:a.name,asleep:a.asleep,job:a.job,appearance:a.appearance,age:a.age,carrying:a.carrying,pose:a.pose}))};
           });
           if ((e.kind === "town.gathering" || e.kind === "town.fire") && e.place) { const pl = places.get(e.place); const pay = (e.payload ?? {}) as { kind?: string; crowd?: string[]; held?: boolean; stage?: string }; if (pl && pay.held !== false) { const kind = e.kind === "town.fire" ? "fire" : (pay.kind ?? "feast"); staged.current = { kind, place: e.place, x: pl.x, y: pl.y, actors: e.actors, until: Date.now() + (kind === "fire" ? 180000 : 150000) }; const crowd = (pay.crowd ?? []).map((id) => figs.current.get(id)).filter((f): f is Fig => !!f && f.place === e.place); const leads = e.actors.map((id) => figs.current.get(id)).filter((f): f is Fig => !!f && f.place === e.place && !f.asleep); const g = gather(pl); const cxp = g.x + g.w / 2, cyp = g.y + 10; leads.forEach((f, i) => { releaseSeat(f); f.tx = cxp - 14 + i * 28; f.ty = cyp; f.facing = i === 0 ? 1 : -1; }); const others = crowd.filter((f) => !leads.includes(f)); others.forEach((f, i) => { const n = Math.max(1, others.length); const ang = Math.PI * 0.15 + (Math.PI * 0.7 * i) / n; const r = 70 + (i % 2) * 22; releaseSeat(f); f.tx = cxp + Math.cos(ang) * r * 1.6; f.ty = cyp + 30 + Math.sin(ang) * r * 0.5; }); if (kind === "wedding" || kind === "funeral") ambienceRef.current?.toll(kind === "wedding" ? 6 : 3); } }
-          if (e.importance >= 0.45 && e.kind !== "agent.move" && e.kind !== "agent.reflect") { const f = e.actors[0] ? figs.current.get(e.actors[0]) : null; const p = e.place ? places.get(e.place) : null; const x = f?.x ?? p?.x, y = f?.y ?? p?.y; if (x !== undefined && y !== undefined) cinema.current = { x, y: y - 40, ids: e.actors, at: Date.now() }; }
+          if (e.importance >= 0.45 && e.kind !== "agent.move" && e.kind !== "agent.reflect") { const f = e.actors[0] ? figs.current.get(e.actors[0]) : null; const p = e.place ? places.get(e.place) : null; const x = f?.x ?? p?.x, y = f?.y ?? p?.y; if (x !== undefined && y !== undefined) cinema.current = { x, y: y - 40, ids: e.actors, at: Date.now(), text: e.text }; }
+          if (e.kind === "agent.move" && eventActor) eventActor.activity = null;
           if (e.kind === "agent.move" && e.place) moveTo(e.actors[0]!, e.place);
           if (e.kind === "agent.sleep") { const f = figs.current.get(e.actors[0]!); if (f) { f.asleep = true; f.pose = "sleep"; } }
           if (e.kind === "agent.wake") { const f = figs.current.get(e.actors[0]!); if (f) { f.asleep = false; f.pose = "idle"; } }
@@ -681,26 +767,41 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           if (e.kind === "agent.fired") { const f = figs.current.get(e.actors[0]!); if (f) f.moment = { pose: "idle", until: Date.now() + 6000, mood: { anger: 0.5 } }; }
           if (e.kind === "boat.dock") { if (/docked/.test(e.text)) { boat.position.x = awayX; boatTarget = dockX; ambience.horn(); } }
           if (e.kind === "boat.depart") boatTarget = awayX;
-          if (e.kind === "agent.arrive") { void fetch(`${API}/api/agents/${e.actors[0]}`).then((r) => r.json()).then((a: PublicAgent) => { if (a?.id) { const f = ensure(a); f.x = boat.position.x + 40; f.y = boat.position.y - 10; f.g.position.set(f.x, f.y); } }); }
-          if (e.kind === "agent.build" || e.kind === "town.built" || (e.kind === "agent.work" && /mornings done/.test(e.text))) void refreshPlaces();
+          if ((e.kind.startsWith("item.") || ["agent.trade", "agent.give", "agent.take", "agent.eat"].includes(e.kind)) && e.actors[0]) void fetch(`${apiUrl}/api/agents/${e.actors[0]}`, {cache: "no-store"}).then(r => r.ok ? r.json() : null).then((a: PublicAgent | null) => { if (alive && a?.id) ensure(a); }).catch(() => {});
+          if (e.kind === "agent.arrive") { void fetch(`${apiUrl}/api/agents/${e.actors[0]}`).then((r) => r.json()).then((a: PublicAgent) => { if (a?.id) { const f = ensure(a); f.x = boat.position.x + 40; f.y = boat.position.y - 10; f.g.position.set(f.x, f.y); } }); }
+          if (e.kind.startsWith("item.") || e.kind === "town.recipe" || e.kind === "agent.trade" || e.kind === "agent.make" || e.kind === "place.decorated" || e.kind === "garden.harvest" || e.kind === "agent.build" || e.kind === "town.built" || (e.kind === "agent.work" && /mornings done/.test(e.text))) void refreshPlaces();
           if (e.importance >= 0.1 && e.kind !== "agent.move") setFeed((f) => [e, ...f].slice(0, 12));
         }
       };
 
       let tick = 0;
+      // a filmed pan to a selected person or a picked event, eased both ends; the hand takes over once it lands
+      let glide: { fromX: number; fromY: number; toX: number; toY: number; start: number; dur: number } | null = null;
+      let lastSel: string | null = null; let lastSpotAt = 0; let lastCaptionKey = "";
       // a hand on the camera in the street view: drag to look around, wheel to zoom, a little inertia after letting go
       const canvas = app.canvas; let press: { x: number; y: number; cx: number; cy: number; moved: boolean } | null = null; let lastMove = { x: 0, y: 0, t: 0 };
       const handOn = () => { const c = camera.current; if (!c.hand) { const Wd = app!.screen.width, Hd = app!.screen.height; c.hand = { x: (Wd / 2 - c.x) / c.zoom, y: (Hd / 2 - c.y) / c.zoom, zoom: c.zoom, vx: 0, vy: 0 }; c.follow = null; } return c.hand; };
+      const fitZoom = () => Math.min(app!.screen.width / (W * 1.12), Math.max(180,app!.screen.height - (observer ? 150 : 0)) / (H * 1.12));
+      if (observer && !parked && !focusRef.current) camera.current.hand = {x:W/2,y:H/2+(observer ? 65/fitZoom() : 0),zoom:fitZoom(),vx:0,vy:0};
+      navigateMini.current = (x,y) => { parked=null;viewRef.current="street";viewChange.current?.("street");camera.current.follow=null;camera.current.hand={x,y,zoom:Math.max(.7,camera.current.zoom),vx:0,vy:0}; };
       cameraControl.current = action => {
-        if (action === "reset") { camera.current.hand = null; camera.current.follow = mineId; return; }
+        parked=null;
+        if (action === "reset") { camera.current.hand = {x:W/2,y:H/2+(observer ? 65/fitZoom() : 0),zoom:fitZoom(),vx:0,vy:0}; camera.current.follow=null;viewRef.current="street";viewChange.current?.("street");return; }
+        if(viewRef.current !== "street") {viewRef.current="street";viewChange.current?.("street");}
         const hand = handOn(); hand.vx = 0; hand.vy = 0;
-        hand.zoom = Math.min(1.9, Math.max(0.55, hand.zoom * (action === "in" ? 1.2 : 1 / 1.2)));
+        hand.zoom = Math.min(1.9, Math.max(Math.min(.2,fitZoom()), hand.zoom * (action === "in" ? 1.2 : 1 / 1.2)));
+      };
+      // fly the free camera to a world point, easing from wherever it is now; the street view is where this can be seen
+      const startGlide = (x: number, y: number) => {
+        if (viewRef.current !== "street") { viewRef.current = "street"; viewChange.current?.("street"); }
+        const h = handOn(); h.vx = 0; h.vy = 0;
+        glide = { fromX: h.x, fromY: h.y, toX: x, toY: y, start: performance.now(), dur: 900 };
       };
       canvas.addEventListener("pointerdown", (e) => { if (viewRef.current !== "street") return; press = { x: e.clientX, y: e.clientY, cx: e.clientX, cy: e.clientY, moved: false }; lastMove = { x: e.clientX, y: e.clientY, t: performance.now() }; });
       canvas.addEventListener("pointermove", (e) => { if (!press) return; const dx = e.clientX - press.cx, dy = e.clientY - press.cy; if (!press.moved && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 6) return; press.moved = true; suppressSelectUntil = performance.now() + 250; const h = handOn(); h.x -= dx / camera.current.zoom; h.y -= dy / camera.current.zoom; const now = performance.now(); const dt = Math.max(8, now - lastMove.t); h.vx = Math.max(-30, Math.min(30, -(e.clientX - lastMove.x) / dt * 16 / camera.current.zoom)); h.vy = Math.max(-30, Math.min(30, -(e.clientY - lastMove.y) / dt * 16 / camera.current.zoom)); lastMove = { x: e.clientX, y: e.clientY, t: now }; press.cx = e.clientX; press.cy = e.clientY; });
       const release = () => { if (press?.moved) suppressSelectUntil = performance.now() + 250; if (press?.moved && camera.current.hand && performance.now() - lastMove.t > 80) { camera.current.hand.vx = 0; camera.current.hand.vy = 0; } press = null; };
       canvas.addEventListener("pointerup", release); canvas.addEventListener("pointercancel", release); canvas.addEventListener("pointerleave", release);
-      canvas.addEventListener("wheel", (e) => { if (viewRef.current !== "street") return; e.preventDefault(); const h = handOn(); const before = h.zoom; h.zoom = Math.min(1.9, Math.max(0.55, h.zoom * Math.exp(-e.deltaY * 0.0012))); const r = canvas.getBoundingClientRect(); const mx = e.clientX - r.left - app!.screen.width / 2, my = e.clientY - r.top - app!.screen.height / 2; h.x += mx / before - mx / h.zoom; h.y += my / before - my / h.zoom; }, { passive: false });
+      canvas.addEventListener("wheel", (e) => { if (viewRef.current !== "street") return; e.preventDefault(); const h = handOn(); const before = h.zoom; h.zoom = Math.min(1.9, Math.max(Math.min(.2,fitZoom()), h.zoom * Math.exp(-e.deltaY * 0.0012))); const r = canvas.getBoundingClientRect(); const mx = e.clientX - r.left - app!.screen.width / 2, my = e.clientY - r.top - app!.screen.height / 2; h.x += mx / before - mx / h.zoom; h.y += my / before - my / h.zoom; }, { passive: false });
       let lastCut = ""; let cutAt = 0;
       // where the frame goes, for tuning: window.__ftperf holds milliseconds per section since load
       const perf: Record<string, number> = {}; let perfT = 0; let perfSection = "start"; (window as unknown as { __ftperf: Record<string, number>; __ftworld: Container; __ftscene: Container }).__ftperf = perf; (window as unknown as { __ftworld: Container }).__ftworld = world; (window as unknown as { __ftscene: Container }).__ftscene = scene;
@@ -709,14 +810,29 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       app.ticker.add(() => {
         if (!app) return; if(!quietMotion.matches)detailSeconds+=Math.min(app.ticker.deltaMS,50)/1000; tick++; perfT = performance.now(); perfSection = "camera"; perf.frames = (perf.frames ?? 0) + 1;
         const Wd = app.screen.width, Hd = app.screen.height; const cam = camera.current;
+        // a person was selected, or an event was picked from the journal: fly there, and pulse the actors
+        {
+          const selNow = selRef.current;
+          if (selNow !== lastSel) { lastSel = selNow; const f = selNow ? figs.current.get(selNow) : null; if (f && !cam.follow) startGlide(f.x, f.y - 20); }
+          const sp = spotRef.current;
+          if (sp && sp.at !== lastSpotAt) {
+            lastSpotAt = sp.at;
+            const ids = sp.actors ?? [];
+            const tf = ids.map((id) => figs.current.get(id)).find((x): x is Fig => !!x);
+            const tp = sp.place ? places.get(sp.place) : null;
+            if (tf) startGlide(tf.x, tf.y - 20); else if (tp) startGlide(tp.x, tp.y - 20);
+            const until = Date.now() + 4200; for (const id of ids) pulses.set(id, until);
+          }
+        }
         const hand = viewRef.current === "street" ? cam.hand : null;
         if (viewRef.current !== "street" && cam.hand) cam.hand = null;
+        if (glide && hand && !press) { const t = Math.min(1, (performance.now() - glide.start) / glide.dur); const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; hand.x = glide.fromX + (glide.toX - glide.fromX) * e; hand.y = glide.fromY + (glide.toY - glide.fromY) * e; if (t >= 1) glide = null; } else if (glide && press) glide = null;
         const followed = viewRef.current === "street" && cam.follow ? figs.current.get(cam.follow) : null;
         const talking = followed ? followed.pose === "talk" : false;
         // the cinema breathes: the zoom swells and settles over half a minute; a followed conversation draws the camera in a step
-        const zoom = viewRef.current === "map" ? Math.min(Wd / (W * 1.1), Hd / (H * 1.24)) : viewRef.current === "cinema" ? 1.22 + Math.sin(tick / 1400) * 0.06 : hand ? hand.zoom : talking ? 1.16 : 1.05; // the map leaves sea around the island, so the horizon shows
-        const zoomAim = parked && !hand && Number.isFinite(zoomParam) ? (Number.isFinite(zoomToParam) ? zoomParam + (zoomToParam - zoomParam) * moveP() : zoomParam) : zoom; cam.zoom += (zoomAim - cam.zoom) * (hand ? 0.16 : parked ? 0.5 : 0.05);
-        let fx = W / 2, fy = H / 2 + 40;
+        const zoom = viewRef.current === "map" ? fitZoom() : viewRef.current === "cinema" ? 1.22 + Math.sin(tick / 1400) * 0.06 : hand ? hand.zoom : talking ? 1.16 : 1.05; // the map leaves sea around the island, so the horizon shows
+        const zoomAim = parked && !hand && !focusRef.current && viewRef.current === "street" && Number.isFinite(zoomParam) ? (Number.isFinite(zoomToParam) ? zoomParam + (zoomToParam - zoomParam) * moveP() : zoomParam) : zoom; cam.zoom += (zoomAim - cam.zoom) * (hand ? 0.16 : parked ? 0.5 : 0.05);
+        let fx = W / 2, fy = H / 2 + (observer && viewRef.current === "map" ? 65/zoom : 40);
         if (hand) { hand.vx = Math.max(-22, Math.min(22, hand.vx)); hand.vy = Math.max(-22, Math.min(22, hand.vy)); hand.x = Math.max(-200, Math.min(W + 200, hand.x + (press ? 0 : coast(hand.vx, app.ticker.deltaTime).distance))); hand.y = Math.max(-150, Math.min(H + 150, hand.y + (press ? 0 : coast(hand.vy, app.ticker.deltaTime).distance))); if (!press) { hand.vx = coast(hand.vx, app.ticker.deltaTime).velocity; hand.vy = coast(hand.vy, app.ticker.deltaTime).velocity; } fx = hand.x; fy = hand.y; } // the hand stays over the island and never flings it
         else if (viewRef.current === "street") { if (followed) { const lead = Math.max(-70, Math.min(70, (followed.tx - followed.x) * 0.7)); fx = followed.x + lead; fy = followed.y - 60; } else { const mk = places.get("market"); if (mk) { fx = mk.x; fy = mk.y; } } }
         // the camera follows the day: the latest moment that mattered, or the busiest place when nothing has happened for a while
@@ -724,7 +840,17 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         if (viewRef.current === "cinema" && stagedNow) { fx = stagedNow.x; fy = stagedNow.y + 20; }
         else if (viewRef.current === "cinema") { const cn = cinema.current; if (cn && Date.now() - cn.at < 120000) { const f = cn.ids[0] ? figs.current.get(cn.ids[0]) : null; fx = f?.x ?? cn.x; fy = (f?.y ?? cn.y) - 50; } else { let best: PlaceView | null = null; for (const p of places.values()) if (!best || p.crowd > best.crowd) best = p; if (best) { fx = best.x; fy = best.y - 20; } } }
         if (viewRef.current === "cinema") { const key = stagedNow ? `s:${stagedNow.place}` : cinema.current ? `c:${cinema.current.at}` : "idle"; if (key !== lastCut) { lastCut = key; cutAt = tick; } fx += Math.sin(tick / 900) * 36; fy += Math.cos(tick / 1100) * 18; } // a slow drift while the moment plays
-        if (parked && !hand) { const k = moveTo_ ? moveP() : 0; fx = parked.x + (moveTo_ ? (moveTo_.x - parked.x) * k : 0); fy = parked.y + (moveTo_ ? (moveTo_.y - parked.y) * k : 0); }
+        // the lower third: who is on screen and what the record says is happening, while the cinema plays
+        if (viewRef.current === "cinema" && tick % 12 === 0) {
+          let capText: string | null = null, capIds: string[] = [];
+          if (stagedNow) { capText = stagedNow.kind === "fire" ? "A fire on the island" : `The town gathers · ${stagedNow.kind}`; capIds = stagedNow.actors; }
+          else if (cinema.current && Date.now() - cinema.current.at < 120000 && cinema.current.text) { capText = cinema.current.text; capIds = cinema.current.ids; }
+          const who = capIds.map((id) => agents.current.get(id)?.name.split(" ")[0]).filter(Boolean).join(", ");
+          const key = capText ?? "";
+          if (key !== lastCaptionKey) { lastCaptionKey = key; setCaption(capText ? { text: capText, who } : null); }
+        }
+        if (parked && !hand && !focusRef.current && viewRef.current === "street") { const k = moveTo_ ? moveP() : 0; fx = parked.x + (moveTo_ ? (moveTo_.x - parked.x) * k : 0); fy = parked.y + (moveTo_ ? (moveTo_.y - parked.y) * k : 0); }
+        if (observer && focusRef.current && followed && !hand && viewRef.current === "street") fy += Math.min(160, Hd * .25) / cam.zoom;
         const tx = Wd / 2 - fx * cam.zoom, ty = Hd / 2 - fy * cam.zoom;
         const cutting = viewRef.current === "cinema" && tick - cutAt < 90; // a new moment is a cut, not a crawl
         const ease = hand ? 1 : viewRef.current === "cinema" ? (cutting ? 0.09 : 0.02) : 0.08; cam.x += (tx - cam.x) * ease; cam.y += (ty - cam.y) * ease;
@@ -745,7 +871,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         const wind = weather === "storm" ? 1 : weather === "wind" ? 0.8 : weather === "rain" ? 0.45 : weather === "fog" ? 0.1 : 0.2;
         // the sea itself: the foam breathes, the water darkens and breaks white in a blow, rain rings the surface
         const rough = weather === "storm" ? 1 : weather === "wind" ? 0.5 : 0;
-        if (tick % 3 === 0) drawFoam(tick, rough);
+        if (tick % 3 === 0) { drawFoam(tick, rough); drawTide(tick); }
         sea.tint = weather === "storm" ? 0x8fa9a6 : weather === "rain" || weather === "fog" ? 0xb9cfcb : 0xffffff;
         if (tick % 3 === 0) {
           seaLife.clear();
@@ -762,7 +888,8 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         for (let i = 0; i < boats.length; i++) { const bt = boats[i]!; const breeze=harborBreeze(detailSeconds,bt.x,bt.userData,wind);bt.position.y=bt.userData+Math.sin(detailSeconds*1.35+i*2)*(quietMotion.matches?0:.7+breeze*1.2);bt.rotation=quietMotion.matches?0:Math.sin(detailSeconds*.9+i)*(.007+breeze*.018); }
         updateMoorings();
         // the mill turns while it is worked; the chapel bell swings at ten on Sunday; the washing sways in the wind
-        const millP = places.get("mill"); const millOn = !!millP && millP.crowd > 0 && (c?.hour ?? 12) >= 7 && (c?.hour ?? 12) < 15 && c?.weekday !== "Sunday";
+        const workingPlaces = new Set([...agents.current.values()].filter(a => !a.asleep && a.activity?.kind === "work" && a.activity.place === a.location && a.activity.until > (c?.t ?? 0)).map(a => a.location));
+        const millOn = workingPlaces.has("mill");
         millSpeed += ((millOn ? 0.012 : 0) - millSpeed) * 0.01; for (const sl of sails) sl.rotation += millSpeed;
         const bellOn = c?.weekday === "Sunday" && c.hour === 10 && c.minute % 60 < 3; for (const bl of bells) bl.rotation = bellOn ? Math.sin(tick / 4) * 0.5 : bl.rotation * 0.95;
         for (const cl of cloths) {const parent=cl.parent;const breeze=harborBreeze(detailSeconds,parent?.x??0,parent?.y??0,wind);cl.skew.x=quietMotion.matches?0:Math.sin(detailSeconds*2.1)*.075*breeze+Math.sin(detailSeconds*5)*.02*breeze;}
@@ -792,7 +919,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           prints_.clear(); for (const pr of prints) { const ageT = (tick - pr.at) / 900; if (ageT > 1) continue; prints_.ellipse(pr.x, pr.y, 3, 1.6).fill({ color: C.kelp, alpha: 0.18 * (1 - ageT) * snowiness }); }
         }
         if (tick % 60 === 0 && c && setSeason(forcedSeason ?? c.season)) { plantTrees(); }
-        if (tick % 120 === 0) wear.redraw();
+        if (tick % 120 === 0) { wear.redraw(); redrawTrails(); }
         if (tick % 60 === 0) ground.tint = SEASON_CAST[forcedSeason ?? c?.season ?? "summer"] ?? 0xffffff;
         // the short season: the fields turn to lavender
         if (tick % 60 === 0) { const bloom = !!c?.inSeason?.includes("lavender"); if (bloom !== lavender.visible) { lavender.visible = bloom; } }
@@ -825,6 +952,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         life.update({ tick, hour, rise, set, night: night.alpha / 0.42, season: forcedSeason ?? c?.season ?? "summer", weather, wind, people: livingPeople, effects: effectsOn });
         for (const snd of life.sounds) ambience.cue(snd.name, Math.hypot(snd.x - cam.x, snd.y - cam.y), snd.x - cam.x, snd.level ?? 1);
         if (effectsRef.current !== effectsOn) { effectsOn = effectsRef.current; sea.filters = effectsOn && !nofx.has("water") ? [water] : null; ripples.visible = !effectsOn; lamps.visible = !effectsOn; night.visible = !effectsOn; dusk.visible = !effectsOn; rain.visible = !effectsOn; if (!effectsOn) { sunGrade.veil.visible = sunGrade.glow.visible = sunGrade.halo.visible = false; } fog.visible = !effectsOn; if (!effectsOn) { lighting.dark.visible = false; lighting.glow.visible = false; weatherFx.rain.visible = false; weatherFx.snow.visible = false; weatherFx.fog.visible = false; clouds.puffs.visible = false; clouds.shadows.visible = false; } }
+        rays.clear(); roofGlow.clear();
         if (effectsOn) {
           const up = hour > rise && hour < set; let lx: number, ly: number, ls: number;
           if (up) { const f = (hour - rise) / Math.max(1, set - rise); const ang = Math.PI * (1 - f); lx = cx - Rx * 1.05 * Math.cos(ang); ly = cy - Ry * 1.05 - Ry * 0.16 * Math.abs(Math.sin(ang)) - 30; ls = 0.9; }
@@ -836,6 +964,31 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           const golden = Math.max(0, 1 - Math.min(nearRise, nearSet) / 1.1);
           const blue = Math.max(0, 1 - Math.abs(hour - (phase === "rise" ? rise - 0.7 : set + 0.7)) / 0.7);
           { const f = Math.max(0, Math.min(1, (hour - rise) / Math.max(1, set - rise))); const ang = Math.PI * (1 - f); const sx = cx - Rx * 1.05 * Math.cos(ang), sy = cy - Ry * 1.05 - Ry * 0.16 * Math.abs(Math.sin(ang)) - 30; const [ex, ey] = par(0.7); sunGrade.update({ golden, blue, phase, sun: { x: sx + ex, y: sy + ey }, cover }); }
+          // L2: the low sun throws soft shafts through the pinewood at dawn and dusk, from the horizon it stands on
+          const pw = places.get("pinewood");
+          if (pw && golden > 0.15 && (1 - cover) > 0.2 && night.alpha < 0.4) {
+            const sunX = phase === "rise" ? cx + Rx * 1.05 : cx - Rx * 1.05, sunY = cy - Ry * 1.12;
+            const dx = pw.x - sunX, dy = pw.y - sunY, dl = Math.hypot(dx, dy) || 1; const ux = dx / dl, uy = dy / dl, nx = -uy, ny = ux;
+            const strength = golden * (1 - cover) * Math.max(0.3, 1 - night.alpha / 0.4);
+            const warm = mix(0x6b5a34, phase === "rise" ? 0x6a5530 : 0x6e4e2c, 0.5); // dim warm; additive blend turns it to glowing gold over shade
+            for (let i = -4; i <= 4; i++) {
+              const off = i * 66 + Math.sin(tick / 220 + i * 1.3) * 12;
+              const bx = pw.x + nx * off - ux * 220, by = pw.y - 150 + ny * off - uy * 220;
+              const L = 460 + (i % 2) * 90, wid = 11 + Math.abs(Math.sin(tick / 260 + i * 1.7)) * 10;
+              const rex = bx + ux * L, rey = by + uy * L;
+              const a = strength * (0.32 + 0.28 * Math.max(0, Math.sin(tick / 150 + i * 2)));
+              rays.moveTo(bx - nx * wid, by - ny * wid).lineTo(bx + nx * wid, by + ny * wid).lineTo(rex + nx * wid * 0.35, rey + ny * wid * 0.35).lineTo(rex - nx * wid * 0.35, rey - ny * wid * 0.35).closePath().fill({ color: warm, alpha: a });
+            }
+          }
+          // #2: the low sun catches the upper walls and roofs on the side it stands, warm and additive so it lifts the roofs without muddying them
+          if (golden > 0.12 && (1 - cover) > 0.2 && night.alpha < 0.5) {
+            const sd = phase === "rise" ? 1 : -1; const gs = golden * (1 - cover) * Math.max(0.35, 1 - night.alpha / 0.5);
+            const rwarm = mix(0x66502a, phase === "rise" ? 0x63501f : 0x6a4620, 0.5);
+            for (const p of places.values()) { const ry = ROOF_Y[p.sprite]; if (ry === undefined) continue; const gx = p.x + sd * 24, gy = p.y + ry + 22;
+              roofGlow.ellipse(gx, gy, 62, 32).fill({ color: rwarm, alpha: gs * 0.55 });
+              roofGlow.ellipse(gx + sd * 14, gy - 6, 36, 19).fill({ color: rwarm, alpha: gs * 0.7 });
+            }
+          }
           const shadeTint = mix(LIGHT.night, 0x1b2140, blue * (1 - cover));
           water.update({ time: tick / 60, cam: { x: cam.x, y: cam.y, zoom: cam.zoom }, sun: { x: lx, y: ly, strength: ls * (weather === "storm" ? 0.15 : weather === "rain" || weather === "fog" ? 0.35 : 1) * (1 + golden * 0.5) }, color: GROUND.water, deep: GROUND.waterDeep, glint: up ? mix(0xffe9a8, phase === "rise" ? 0xffb27a : 0xff8f57, golden) : 0xd9e3ff, rough, night: Math.min(1, night.alpha / 0.42) });
           const sources: LightSource[] = [];
@@ -844,7 +997,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
               sources.push({ x: d.x + 14, y: d.y - 58, r: 90, color: LIGHT.lamp, strength: .72, flicker: .025 });
               sources.push({ x: d.x + 18, y: d.y + 2, r: 62, aspect: .38, color: LIGHT.lamp, strength: .42 });
             }
-            for (const p of places.values()) if (p.crowd > 0 && p.kind !== "plot" && p.kind !== "wild" && p.kind !== "public" && p.kind !== "harbor" && p.kind !== "market") sources.push({ x: p.x - 22, y: p.y - 78, r: 90, color: LIGHT.window, strength: 0.7, flicker: 0.025 });
+            for (const p of places.values()) if (p.crowd > 0 && p.kind !== "plot" && p.kind !== "wild" && p.kind !== "public" && p.kind !== "harbor" && p.kind !== "market") { sources.push({ x: p.x - 22, y: p.y - 78, r: 90, color: LIGHT.window, strength: 0.7, flicker: 0.025 }); sources.push({ x: p.x - 14, y: p.y + 20, r: 78, aspect: 0.4, color: LIGHT.window, strength: 0.42, flicker: 0.02 }); } // #4: warm light spilling from the windows onto the ground at the threshold
           }
           if (night.alpha > 0.1) sources.push({ x: W - 220, y: 90, r: 130, color: 0xdfe8ff, strength: 0.5, noHole: true }); // the moon blooms too
           sources.push(...life.lights);
@@ -886,7 +1039,7 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         if (tick % 2 === 0) { moths.clear(); if (night.alpha > 0.15) for (const d of decor) { if (d.sprite !== "lamp") continue; for (let i = 0; i < 3; i++) { const t = tick / (9 + i * 3) + i * 2; moths.circle(d.x + Math.cos(t) * (10 + i * 4) + Math.sin(t * 2.3) * 3, d.y - 58 + Math.sin(t * 1.7) * (7 + i * 2), 1.3).fill({ color: LIGHT.star, alpha: 0.8 }); } } }
         // smoke from a chimney where someone works
         perfMark("smoke");
-        if (tick % 2 === 0) { smoke.clear(); const sn = forcedSeason ?? c?.season; const cold = sn === "winter" || sn === "autumn"; const evening = hour >= 16.5 || hour < 8; litHearths.clear(); for (const [id, [ox, oy]] of [...Object.entries(CHIMNEYS).filter(([, ]) => hour >= 6 && hour <= 20), ...Object.entries(HEARTHS).filter(() => cold || evening)]) { const p = places.get(id); if (!p || p.crowd === 0) continue; if (id in HEARTHS && (cold || evening)) litHearths.add(id); for (let i = 0; i < 6; i++) { const age = ((tick / 3 + i * 17) % 60) / 60; smoke.circle(p.x + ox + Math.sin(age * 6 + i) * 6 + age * wind * 30, p.y + oy - age * 70, 4 + age * 10).fill({ color: C.shell, alpha: 0.5 * (1 - age) }); } } }
+        if (tick % 2 === 0) { smoke.clear(); const sn = forcedSeason ?? c?.season; const cold = sn === "winter" || sn === "autumn"; const evening = hour >= 16.5 || hour < 8; litHearths.clear(); for (const [id, [ox, oy]] of [...Object.entries(CHIMNEYS).filter(([id]) => workingPlaces.has(id)), ...Object.entries(HEARTHS).filter(() => cold || evening)]) { const p = places.get(id); if (!p || p.crowd === 0) continue; if (id in HEARTHS && (cold || evening)) litHearths.add(id); for (let i = 0; i < 6; i++) { const age = ((tick / 3 + i * 17) % 60) / 60; smoke.circle(p.x + ox + Math.sin(age * 6 + i) * 6 + age * wind * 30, p.y + oy - age * 70, 4 + age * 10).fill({ color: C.shell, alpha: 0.5 * (1 - age) }); } } }
         // sound follows the camera
         if (tick % 30 === 0 && c) { const f = cam.follow ? figs.current.get(cam.follow) : null; const p = places.get(f?.place ?? "market"); ambience.tick({ mood: stagedNow ? (stagedNow.kind === "wedding" || stagedNow.kind === "feast" ? "tavern" : stagedNow.kind === "funeral" ? "night" : stagedNow.kind === "fire" ? "storm" : "day") : null, weather, hour: c.hour, season: c.season, district: p?.district ?? "old town", place: p?.id ?? "market", crowd: p?.crowd ?? 0, hearth: !!p && litHearths.has(p.id), walking: !!f && !f.asleep && Math.hypot(f.tx - f.x, f.ty - f.y) > 1.5, wind }); }
         // people
@@ -895,7 +1048,10 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         for (const f of figs.current.values()) {
           const dx = f.tx - f.x, dy = f.ty - f.y, dist = Math.hypot(dx, dy);
           const fleeing = stagedNow?.kind === "fire" && f.place !== stagedNow.place;
-          const motion = advanceWalk(dist, f.speed ?? 0, fleeing ? 78 : f.weak ? 28 : 48, app.ticker.deltaMS / 1000);
+          // #5: people slow behind someone ahead of them rather than walking through a crowd
+          let crowd = 1;
+          if (dist > 8 && !fleeing) { const ix = dx / dist, iy = dy / dist; for (const o of figs.current.values()) { if (o === f || o.asleep || o.boarding) continue; const ox = o.x - f.x, oy = o.y - f.y; const ahead = ox * ix + oy * iy; if (ahead > 6 && ahead < 44 && Math.abs(-ox * iy + oy * ix) < 18) crowd = Math.min(crowd, Math.max(0.3, ahead / 44)); } }
+          const motion = advanceWalk(dist, f.speed ?? 0, (fleeing ? 78 : f.weak ? 28 : 48) * crowd, app.ticker.deltaMS / 1000);
           f.speed = motion.speed;
           const moving = dist > .01;
           if (motion.distance > 0) { f.x += dx / dist * motion.distance; f.y += dy / dist * motion.distance; }
@@ -927,9 +1083,14 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           }
           if (f.moment && (Date.now() > f.moment.until || moving || f.asleep)) f.moment = undefined;
           const moment = f.moment;
+          const actual = agents.current.get(f.id);
+          const activity = actual?.activity && actual.activity.place === f.place && actual.activity.until > (c?.t ?? 0) && !f.asleep ? actual.activity : null;
+          const fishing = activity?.kind === "fish";
+          f.rig.trade(fishing ? "angling" : actual?.gear?.name === "hammer" ? "smith" : actual?.gear?.name === "axe" ? "axe" : actual?.job ?? null);
+          f.rig.hold(fishing ? null : actual?.gear?.name ?? actual?.carrying ?? null);
           f.rig.seatAt(!moving && f.seat ? f.seat.height / .82 : null);
           if (!moving && f.seat) { f.facing=f.seat.facing; f.rig.face(f.facing, true); }
-          f.rig.setPose(f.asleep ? "sleep" : running ? "run" : moving ? "walk" : petting ? "crouch" : moment && moment.pose !== "idle" ? moment.pose : b ? "talk" : f.bench ? "sit" : f.pose === "sit" ? "idle" : f.pose);
+          f.rig.setPose(f.asleep ? "sleep" : running ? "run" : moving ? "walk" : fishing ? "work" : petting ? "crouch" : moment && moment.pose !== "idle" ? moment.pose : b ? "talk" : f.bench ? "sit" : f.pose === "sit" || (f.pose === "work" && !activity) ? "idle" : f.pose);
           // the face: hunger shows, a wedding or a feast lifts it, a funeral lowers it; the eyes go to whoever they are talking to
           const inStage = !!stagedNow && f.place === stagedNow.place; const ag = agents.current.get(f.id);
           f.rig.mood({ hunger: Math.min(1, (ag?.daysHungry ?? 0) / 3), joy: inStage && (stagedNow.kind === "wedding" || stagedNow.kind === "feast") ? 0.8 : (moment?.mood?.joy ?? 0), grief: inStage && stagedNow.kind === "funeral" ? 0.8 : 0, anger: moment?.mood?.anger ?? 0, surprise: moment?.mood?.surprise ?? 0, tired: f.weak ? 0.6 : 0 });
@@ -942,7 +1103,20 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
           const subjectX = viewRef.current === "cinema" ? (cinema.current?.x ?? fx) : fx, subjectY = viewRef.current === "cinema" ? (cinema.current?.y ?? fy) : fy;
           const near = viewRef.current !== "map" && Math.hypot(f.x - subjectX, f.y - subjectY) < (viewRef.current === "cinema" ? 170 : 260);
           const inScene = viewRef.current === "cinema" && !!cinema.current?.ids.includes(f.id) && Date.now() - (cinema.current?.at ?? 0) < 120000;
-          next.push({ id: f.id, name: f.name, x: f.x * cam.zoom + cam.x, y: (f.y - 66) * cam.zoom + cam.y, mine: f.mine, shown: f.mine || !!b || hoverRef.current === f.id || inScene || (near && viewRef.current === "street"), ...(b ? { bubble: b.text } : {}) });
+          next.push({ id: f.id, name: f.name, activity: activity ? fishing ? moving ? "Walking to the pier" : "Fishing · line in the water" : "At work" : undefined, x: f.x * cam.zoom + cam.x, y: (f.y - 66) * cam.zoom + cam.y, mine: f.mine, shown: f.mine || !!b || hoverRef.current === f.id || inScene || (near && viewRef.current === "street"), ...(b ? { bubble: b.text } : {}) });
+        }
+        // the ring under the selected person, and the fading pulse under the actors of a picked event
+        if (tick % 2 === 0) {
+          emphasis.clear();
+          const selF = selRef.current ? figs.current.get(selRef.current) : null;
+          if (selF && selF.g.visible) { emphasis.ellipse(selF.x, selF.y + 2, 30, 30 * 0.42).stroke({ width: 2.5, color: C.coral, alpha: 0.9 }); emphasis.ellipse(selF.x, selF.y + 2, 34, 34 * 0.42).stroke({ width: 1.5, color: C.coral, alpha: 0.35 }); }
+          const nowP = Date.now();
+          for (const [id, until] of pulses) {
+            if (until < nowP) { pulses.delete(id); continue; }
+            const f = figs.current.get(id); if (!f || !f.g.visible) continue;
+            const life = (until - nowP) / 4200; const ph = ((nowP / 900) % 1); const r = 20 + ph * 30;
+            emphasis.ellipse(f.x, f.y + 2, r, r * 0.42).stroke({ width: 2.5, color: C.coral, alpha: (1 - ph) * life * 0.85 });
+          }
         }
         // names stack upward when people stand shoulder to shoulder, so none is written over another
         perfMark("labels");
@@ -954,13 +1128,14 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
         perfMark("end");
       });
     })().catch(() => { if(alive) setLoadError(true); });
-    return () => { alive = false; cameraControl.current = null; for (const timer of speechTimers) clearTimeout(timer); speechTimers.clear(); dialogue.clear(); bubbles.current.clear(); ws?.close(); if (poll) clearInterval(poll); void ambienceRef.current?.disable(); if (inited) { try { app?.destroy(true); } catch {} } figs.current.clear(); agents.current.clear(); seatOf.current.clear(); };
+    return () => { alive = false; cameraControl.current = null; navigateMini.current=null; for (const timer of speechTimers) clearTimeout(timer); speechTimers.clear(); dialogue.clear(); bubbles.current.clear(); ws?.close(); if (poll) clearInterval(poll); void ambienceRef.current?.disable(); if (inited) { try { app?.destroy(true); } catch {} } figs.current.clear(); agents.current.clear(); seatOf.current.clear(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mineId]);
+  }, [mineId, apiUrl]);
 
   useEffect(() => { onSnapshot?.({ clock, feed, citizens: [...agents.current.values()], ready, error: loadError }); }, [clock, feed, ready, loadError, onSnapshot]);
 
-  useEffect(() => { camera.current.follow = mineId; camera.current.hand = null; }, [mineId]);
+  useEffect(() => { camera.current.follow = focusId ?? (observer ? null : mineId); if (focusId || !observer) camera.current.hand = null; }, [mineId, focusId, observer]);
+  useEffect(() => { if(view !== "street") camera.current.hand=null; if (view !== "cinema") setCaption(null); },[view]);
   const z = camera.current.zoom;
   const showLabels = view === "street" || z > 0.6;
 
@@ -970,21 +1145,28 @@ export function World({ mineId, onSelect, view, effects = true, observer = false
       {!ready && <div className="absolute inset-0 flex flex-col gap-3 items-center justify-center text-teal font-bold">{loadError ? <>The island could not be loaded.<button className="underline" onClick={()=>window.location.reload()}>Try again</button></> : "Crossing to the island…"}</div>}
       <div className="absolute inset-0 pointer-events-none crossfade" style={{ background: "radial-gradient(ellipse at center, rgba(30,42,43,0) 55%, rgba(30,42,43,0.22) 100%)", opacity: view === "map" ? 0.5 : view === "cinema" ? 1 : 0.7 }} />
       <button data-world-control="sound" hidden={cleanUi} onClick={() => { const a = ambienceRef.current; if (!a) return; if (sound) { void a.disable(); setSound(false); } else { void a.enable().then(() => setSound(true)); } }} className="absolute right-3 top-3 sm:right-6 sm:top-6 h-9 px-3.5 rounded-full bg-shell text-teal text-[13px] font-bold pointer-events-auto transition-colors" aria-pressed={sound}>{sound ? "Sound on" : "Sound off"}</button>
-      {ready && view === "street" && !cleanUi && !placeInfo && <div data-world-control="camera" role="group" aria-label="Camera controls" className="absolute right-3 top-16 sm:right-6 sm:top-20 flex flex-col rounded-2xl bg-shell text-teal shadow-sm overflow-hidden">
+      {ready && !cleanUi && !placeInfo && <div data-world-control="camera" role="group" aria-label="Camera controls" className="absolute right-3 top-16 sm:right-6 sm:top-20 flex flex-col rounded-2xl bg-shell text-teal shadow-sm overflow-hidden">
         <button aria-label="Zoom in" title="Zoom in" onClick={() => cameraControl.current?.("in")} className="w-11 h-11 text-2xl hover:bg-glass focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-4">+</button>
         <button aria-label="Zoom out" title="Zoom out" onClick={() => cameraControl.current?.("out")} className="w-11 h-11 text-2xl hover:bg-glass focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-4">−</button>
-        <button aria-label="Recenter camera" title="Recenter camera" onClick={() => cameraControl.current?.("reset")} className="w-11 h-11 text-xl hover:bg-glass focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-4">⌖</button>
+        <button aria-label="Show whole island" title="Show whole island" onClick={() => cameraControl.current?.("reset")} className="w-11 h-11 text-xl hover:bg-glass focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-4"><Icon name="map" size={20}/></button>
       </div>}
       <div hidden={cleanUi} className="absolute inset-0 pointer-events-none">
         {labels.map((l) => (
           <div key={l.id} className="absolute flex flex-col items-center gap-1 -translate-x-1/2 -translate-y-full" style={{ left: l.x, top: l.y }}>
             {l.bubble && <div className="bg-glass px-3 py-2 italic text-[13px] max-w-[260px] leading-[1.3] pointer-events-auto shadow-none" style={{ borderRadius: "16px 16px 16px 4px" }}>“{l.bubble}”</div>}
             {/* a name tag: ink on the drawn ground whatever the theme, since the street is always sand; yours in the signal colour */}
-            <div className="crossfade display text-[12px] font-semibold leading-none whitespace-nowrap rounded-[6px] px-1.5 py-[3px]" style={{ opacity: l.shown ? 1 : 0, background: l.mine ? "#E4572E" : "rgba(20,22,26,0.82)", color: "#F7F6F3", letterSpacing: "0.01em" }}>{l.name.split(" ")[0]}{l.mine ? " · you" : ""}</div>
+            <div className="crossfade display text-[12px] font-semibold leading-none whitespace-nowrap rounded-[6px] px-1.5 py-[3px]" style={{ opacity: l.shown ? 1 : 0, background: l.mine ? "#E4572E" : "rgba(20,22,26,0.82)", color: "#F7F6F3", letterSpacing: "0.01em" }}>{l.name.split(" ")[0]}{l.mine ? " · you" : ""}{l.activity && <span className="block text-[10px] font-normal mt-1 opacity-80">{l.activity}</span>}</div>
           </div>
         ))}
       </div>
-      {mini && !cleanUi && <svg data-world-control="mini" className="absolute right-3 bottom-3 sm:right-6 sm:bottom-6 hidden sm:block rounded-2xl bg-shell/90 pointer-events-none" width={180} height={Math.round(180 * mini.h / mini.w)} viewBox={`0 0 ${mini.w} ${mini.h}`} aria-hidden>
+      {caption && !cleanUi && view === "cinema" && <div data-world-control="caption" className="absolute left-1/2 -translate-x-1/2 bottom-[98px] sm:bottom-[135px] w-[min(560px,calc(100%-32px))] pointer-events-none rise" style={{ zIndex: 5 }}>
+        <div className="rounded-2xl px-4 py-3 shadow-sm" style={{ background: "rgba(20,22,26,0.82)", color: "#F7F6F3" }}>
+          {caption.who && <div className="text-[11px] font-semibold uppercase mb-1" style={{ letterSpacing: "0.06em", opacity: 0.7 }}>{caption.who}</div>}
+          <div className="text-[14px] leading-snug">{caption.text}</div>
+        </div>
+      </div>}
+      {mini && !cleanUi && <svg data-world-control="mini" className="absolute right-3 bottom-3 sm:right-6 sm:bottom-6 hidden sm:block rounded-2xl bg-shell/90 pointer-events-auto" width={180} height={Math.round(180 * mini.h / mini.w)} viewBox={`0 0 ${mini.w} ${mini.h}`} role="button" tabIndex={0} aria-label="Island minimap. Click to travel, or press Enter to show the whole island." onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();cameraControl.current?.("reset");}}} onClick={e=>{const matrix=e.currentTarget.getScreenCTM();if(!matrix)return;const p=new DOMPoint(e.clientX,e.clientY).matrixTransform(matrix.inverse());navigateMini.current?.(Math.max(0,Math.min(mini.w,p.x)),Math.max(0,Math.min(mini.h,p.y)));}}>
+        <rect width={mini.w} height={mini.h} fill="#d4ddcb" rx={80}/>
         {mini.places.filter((p) => p.kind !== "public" && p.kind !== "wild").map((p) => <circle key={p.id} cx={p.x} cy={p.y} r={p.kind === "plot" ? 22 : 34} fill={p.kind === "plot" ? "#B9CFC8" : "#1F5F5B"} opacity={0.55} />)}
         {mini.people.map((pp, i) => <circle key={i} cx={pp.x} cy={pp.y} r={pp.mine ? 30 : 16} fill={pp.mine ? "#E8735A" : "#1E2A2B"} />)}
         <rect x={mini.view.x} y={mini.view.y} width={mini.view.w} height={mini.view.h} fill="none" stroke="#1F5F5B" strokeWidth={18} rx={40} />
