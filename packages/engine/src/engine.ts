@@ -8,7 +8,7 @@ import { recordBuildingMoment } from "./building-history.ts";
 import type { Action, ActionProposal, AgentId, PlaceId, Perception, TownEvent, EventKind, Persona, Paper, Reflection, DayPlan, Child, Passenger } from "@unwatched/protocol";
 import { OPTIONS_DEFAULT } from "@unwatched/protocol";
 import { Rng } from "./rng.ts";
-import type { AgentState, Deal, Brain, Budget, EventSink, Job, Place, Tier, Memory, TownSnapshot, AgentSnapshot, DigestContext, LifeContext, Gathering, Seal, JudgeContext, Rule } from "./types.ts";
+import type { AgentState, Deal, Brain, Budget, EventSink, Job, Place, Tier, Memory, TownSnapshot, AgentSnapshot, DigestContext, LifeContext, Gathering, Seal, JudgeContext, Rule, TownCulture } from "./types.ts";
 import { makeJobs, makePlaces, FOOD_ITEMS, PERISHABLE, MINUTES_PER_DAY, SEASONS, BUILDS, GARDEN, WORKS, buildKind, lookHash, siteName, stockShelf, ISLAND, type WorldPack } from "./world.ts";
 import { retrieve, compress, age, drift, memoryForMind } from "./memory.ts";
 import { sha256, canonicalEvent } from "./hash.ts";
@@ -140,6 +140,8 @@ export class Town {
   /** Laws with teeth, and the words the island keeps. */
   evolution: EvolutionStory[] = [];
   rules: Rule[] = []; sayings: { text: string; by: AgentId[] }[] = [];
+  /** What the island has become, from what it has actually lived through. Nudged once a night, in `updateCulture`; never rolled, never set by hand. */
+  culture: TownCulture = { values: { industrious: 0.3, communal: 0.3, mercantile: 0.3, resilient: 0.3, devout: 0.3 }, lean: null, signature: null, trade: {}, notable: null, wealth: 0, descriptor: "an island still finding what it is", updatedDay: 0 };
   /** The chain of seals: one per day, each hashing the day's events and the seal before it. Nothing is invented, and this is how anyone can check. */
   chain: Seal[] = [];
   t = 0;
@@ -332,7 +334,7 @@ export class Town {
     this.laws.splice(0, this.laws.length, ...snap.laws);
     this.children.splice(0, this.children.length, ...(snap.children ?? []));
     this.evolution=structuredClone(snap.civic?.evolution??[]);
-    if (snap.civic) { this.mayor = snap.civic.mayor && this.agents.has(snap.civic.mayor) ? snap.civic.mayor : null; this.electedDay = snap.civic.elected; this.works = [...snap.civic.works]; this.gatherings = (snap.civic.gatherings ?? []).map((g) => ({ ...g })); this.wedded = new Set(snap.civic.wedded ?? []); this.chain = [...(snap.civic.chain ?? [])]; this.rules = [...(snap.civic.rules ?? [])]; this.sayings = [...(snap.civic.sayings ?? [])]; this.nextGatheringId = 1 + Math.max(0, ...this.gatherings.map((g) => g.id)); }
+    if (snap.civic) { this.mayor = snap.civic.mayor && this.agents.has(snap.civic.mayor) ? snap.civic.mayor : null; this.electedDay = snap.civic.elected; this.works = [...snap.civic.works]; this.gatherings = (snap.civic.gatherings ?? []).map((g) => ({ ...g })); this.wedded = new Set(snap.civic.wedded ?? []); this.chain = [...(snap.civic.chain ?? [])]; this.rules = [...(snap.civic.rules ?? [])]; this.sayings = [...(snap.civic.sayings ?? [])]; this.nextGatheringId = 1 + Math.max(0, ...this.gatherings.map((g) => g.id)); this.culture = snap.civic.culture ? structuredClone(snap.civic.culture) : this.culture; }
     this.nextLetterId = 1 + Math.max(0, ...[...this.agents.values()].flatMap((a) => a.letters.map((l) => l.id)));
     this.nextDealId = Math.max(snap.civic?.nextDealId ?? 1, 1 + Math.max(0, ...[...this.agents.values()].flatMap((a) => a.deals.map((d) => d.id))));
   }
@@ -350,7 +352,7 @@ export class Town {
         relationships: [...a.relationships.entries()].map(([other, r]) => ({ other, ...r })),
         memory: a.memory,
       })),
-      papers: this.papers.slice(-14), laws: this.laws, children: this.children.map((c) => ({ ...c })), civic: { evolution: structuredClone(this.evolution), nextDealId: this.nextDealId, mayor: this.mayor, elected: this.electedDay, works: [...this.works], gatherings: this.gatherings.filter((g) => !g.held).map((g) => ({ ...g })), wedded: [...this.wedded], chain: this.chain.slice(-400), rules: [...this.rules], sayings: this.sayings.slice(-40) },
+      papers: this.papers.slice(-14), laws: this.laws, children: this.children.map((c) => ({ ...c })), civic: { evolution: structuredClone(this.evolution), nextDealId: this.nextDealId, mayor: this.mayor, elected: this.electedDay, works: [...this.works], gatherings: this.gatherings.filter((g) => !g.held).map((g) => ({ ...g })), wedded: [...this.wedded], chain: this.chain.slice(-400), rules: [...this.rules], sayings: this.sayings.slice(-40), culture: structuredClone(this.culture) },
     };
   }
 
@@ -1395,6 +1397,8 @@ export class Town {
     for (const a of this.agents.values()) if (a.notoriety > 0) a.notoriety = clamp(a.notoriety - 0.02);
     // how trust moved today goes on the log, and tomorrow starts from here
     for (const a of this.agents.values()) { for (const [other, r] of a.relationships) { const d = r.trust - (a.trustDawn[other] ?? 0.3); if (Math.abs(d) >= 0.02) a.trustLog.push({ day: this.day, other, delta: Math.round(d * 100) / 100 }); a.trustDawn[other] = r.trust; } if (a.trustLog.length > 200) a.trustLog = a.trustLog.filter((x) => x.day >= this.day - 7); }
+    // the island's own drift: a little each night, from what the day actually held
+    this.updateCulture(todays);
     // the seal: the day's record, hashed and chained
     const seal = this.sealDay();
     // the paper
@@ -2529,8 +2533,9 @@ export class Town {
         this.emit("town.gathering", g.actors, g.place, `The fire at ${place.name} is out. ${who} came with buckets; ${days} days before it stands again${lost ? `, and ${lost} lost to the flames` : ""}.`, 1, { kind: g.kind, crowd: crowd.map((c) => c.id), held: true, days, cause: g.note });
       } else if (g.kind === "feast") {
         const council = this.places.get("council"); const market = this.places.get("market"); const paid = council ? Math.min(council.treasury, who) : 0; if (council && market && paid) { council.treasury -= paid; market.treasury += paid; }
+        const sig = this.culture.signature;
         for (const c of crowd) { c.needs.hunger = 0; c.needs.social = 0; this.remember(c, `${g.note}: the whole town at ${place.name}, and enough for everyone.`, 0.7); for (const d of crowd) if (d !== c) this.nudge(c, d.id, 0.02, 0.02); }
-        this.emit("town.gathering", [], g.place, `${g.note}: ${who} came to ${place.name}, and everyone ate${paid ? `; the council paid ${paid} coins for it` : ""}.`, 0.95, { kind: g.kind, crowd: crowd.map((c) => c.id), held: true });
+        this.emit("town.gathering", [], g.place, `${g.note}: ${who} came to ${place.name}, and everyone ate${paid ? `; the council paid ${paid} coins for it` : ""}.${sig ? ` The island's own ${sig} went round.` : ""}`, 0.95, { kind: g.kind, crowd: crowd.map((c) => c.id), held: true });
       }
     }
     if (this.gatherings.length > 200) this.gatherings = this.gatherings.filter((g) => !g.held || g.day >= this.day - 7);
@@ -2599,6 +2604,74 @@ export class Town {
   }
   /** What the island calls the rules and the sayings it keeps, for the minds. */
   ways(): { rules: string[]; sayings: string[] } { return { rules: this.rules.map((r) => r.kind === "tax" ? `wages taxed ${r.percent}% for the council` : r.kind === "cap" ? `${r.item} capped at ${r.price} coins` : `curfew: nothing served after ${r.hour}:00`), sayings: this.sayings.filter((x) => x.by.length >= 2).slice(-3).map((x) => x.text) }; }
+  /** What the paper, the API, and an owner's reading can print of the island's own drift: the numbers, plus who it names as its own and what has stuck as a saying. */
+  get cultureRecord(): { values: TownCulture["values"]; lean: TownCulture["lean"]; signature: string | null; notable: string | null; descriptor: string; sayings: string[]; since: number } {
+    return { values: { ...this.culture.values }, lean: this.culture.lean, signature: this.culture.signature, notable: this.culture.notable ? (this.agents.get(this.culture.notable)?.persona.name ?? null) : null, descriptor: this.culture.descriptor, sayings: this.sayings.filter((x) => x.by.length >= 2).slice(-3).map((x) => x.text), since: this.culture.updatedDay };
+  }
+  /** How the island's own history nudges what it has become. A little each night, from what the day actually held: never rolled (no `this.rng`), never set by hand. */
+  private updateCulture(dayEvents: TownEvent[]): void {
+    const pop = Math.max(1, this.agents.size);
+    const alpha = 0.06;
+    const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+    const count = (kinds: EventKind[]) => dayEvents.filter((e) => kinds.includes(e.kind)).length;
+    const wealthNow = [...this.agents.values()].reduce((s, a) => s + a.coins, 0) + [...this.places.values()].reduce((s, p) => s + p.treasury, 0);
+    // a real jump, not the ordinary trickle of wages and the mainland's boat money
+    const bigGrowth = wealthNow > this.culture.wealth * 1.05;
+    const heldKind = (e: TownEvent, kind: string) => e.kind === "town.gathering" && (e.payload as { kind?: string } | undefined)?.kind === kind;
+    // dealing with each other, not just buying lunch: a shop purchase is one actor, a trade with a neighbor is two
+    const peerTrades = dayEvents.filter((e) => (e.kind === "agent.trade" && e.actors.length >= 2) || e.kind === "deal.kept").length;
+    // what the day actually held, as a signal in [0,1] per leaning; a quiet day for one leaning is a real zero, not a guess
+    const target: TownCulture["values"] = {
+      industrious: clamp01(count(["agent.work"]) / pop),
+      communal: clamp01(count(["town.gathering", "institution.founded", "institution.joined", "project.contributed", "town.built"]) / Math.max(2, pop * 0.3)),
+      mercantile: clamp01(0.85 * (peerTrades / Math.max(2, pop * 0.3)) + (bigGrowth ? 0.15 : 0)),
+      resilient: count(["town.fire", "agent.died", "agent.evicted"]) > 0 || this.weather === "storm" ? 1 : 0,
+      devout: dayEvents.some((e) => heldKind(e, "wedding") || heldKind(e, "funeral")) ? 1 : 0,
+    };
+    (Object.keys(target) as (keyof TownCulture["values"])[]).forEach((k) => { this.culture.values[k] = clamp01(this.culture.values[k] + (target[k] - this.culture.values[k]) * alpha); });
+    this.culture.wealth = wealthNow;
+
+    // what today's work made, toward a signature the island can point to at a feast or a gift
+    for (const e of dayEvents) {
+      if (e.kind !== "agent.work" || !e.place) continue;
+      const place = this.places.get(e.place); if (!place) continue;
+      const made = this.pack.produce.find((pr) => pr.place === place.id && (!pr.seasons || pr.seasons.includes(this.season)) && (!pr.months || pr.months.includes(this.month)));
+      const item = made?.makes ?? place.sells[0]?.item; if (!item) continue;
+      this.culture.trade[item] = (this.culture.trade[item] ?? 0) + 1;
+    }
+    const ranked = Object.entries(this.culture.trade).sort((a, b) => b[1] - a[1]);
+    const [topItem, topCount] = ranked[0] ?? [null, 0]; const secondCount = ranked[1]?.[1] ?? 0;
+    const nextSignature = topItem && topCount >= 6 && topCount - secondCount >= 3 ? topItem : this.culture.signature;
+
+    // whichever leaning truly stands out; the rest is still finding itself. A real margin is asked before it counts, and more before it gives way to a new one.
+    const keys = ["industrious", "communal", "mercantile", "resilient", "devout"] as const;
+    const sorted = [...keys].sort((a, b) => this.culture.values[b] - this.culture.values[a]);
+    const lead = sorted[0]!, runnerUp = sorted[1]!;
+    const gap = this.culture.values[lead] - this.culture.values[runnerUp];
+    const candidateLean = this.culture.values[lead] >= 0.45 && gap >= 0.08 ? lead : null;
+    const holdsLean = this.culture.lean !== null && this.culture.values[this.culture.lean] >= 0.4;
+    const nextLean = candidateLean === this.culture.lean ? this.culture.lean
+      : holdsLean && candidateLean !== null && this.culture.values[candidateLean] - this.culture.values[this.culture.lean!] < 0.05 ? this.culture.lean
+      : candidateLean;
+
+    // the citizen the town's own trust points to, once someone has clearly stood out among those still here
+    const trustedBy = (id: AgentId) => { let n = 0; for (const o of this.agents.values()) if (o.id !== id && (o.relationships.get(id)?.trust ?? 0) >= 0.6) n++; return n / Math.max(1, pop - 1); };
+    let bestId: AgentId | null = null, bestScore = 0;
+    for (const a of this.agents.values()) { const score = trustedBy(a.id); if (score > bestScore) { bestScore = score; bestId = a.id; } }
+    const currentHolder = this.culture.notable && this.agents.has(this.culture.notable) ? this.culture.notable : null;
+    const currentScore = currentHolder ? trustedBy(currentHolder) : 0;
+    const nextNotable = !currentHolder ? bestId : (bestId && bestId !== currentHolder && bestScore - currentScore >= 0.15) ? bestId : currentHolder;
+
+    const changed = nextLean !== this.culture.lean || nextSignature !== this.culture.signature || nextNotable !== this.culture.notable;
+    this.culture.lean = nextLean; this.culture.signature = nextSignature; this.culture.notable = nextNotable;
+    if (changed) {
+      const leanWord: Record<string, string> = { industrious: "industrious", communal: "close-knit", mercantile: "mercantile", resilient: "unshaken", devout: "devout" };
+      const who = this.culture.notable ? (this.agents.get(this.culture.notable)?.persona.name ?? null) : null;
+      this.culture.descriptor = this.culture.lean ? `an island grown ${leanWord[this.culture.lean]}${this.culture.signature ? `, known for its ${this.culture.signature}` : ""}${who ? `, and for ${who}` : ""}` : "an island still finding what it is";
+      this.culture.updatedDay = this.day;
+      this.emit("town.notice", this.culture.notable ? [this.culture.notable] : [], undefined, `The island has become ${this.culture.descriptor}.`, 0.4, { lean: this.culture.lean, signature: this.culture.signature, notable: this.culture.notable });
+    }
+  }
   /** The two places farthest apart by the roads, for the bridge. */
   private farthestPair(): [Place | null, Place | null] {
     const ids = [...this.places.values()].filter((p) => p.kind !== "wild" && p.kind !== "plot"); let best: [Place | null, Place | null] = [null, null], bestD = -1;

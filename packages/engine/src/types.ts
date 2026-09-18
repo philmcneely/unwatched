@@ -349,6 +349,25 @@ export interface Gathering { id: number; kind: "wedding" | "funeral" | "hearing"
 export interface Seal { day: number; hash: string; prev: string; events: number; from: number; to: number }
 /** A law with teeth: what the council's words were read to mean, and what the engine now does. */
 export type Rule = { kind: "tax"; percent: number; text: string } | { kind: "cap"; item: string; price: number; text: string } | { kind: "curfew"; hour: number; text: string };
+/** How the island has come to be, drawn from what it has actually lived through: a few slow leanings, nudged a little each night from the day's real record — never rolled, never set by hand. */
+export interface TownCulture {
+  /** Slow-moving leanings (0..1). */
+  values: { industrious: number; communal: number; mercantile: number; resilient: number; devout: number };
+  /** Whichever leaning is clearly ahead of the rest; null until one truly stands out. */
+  lean: "industrious" | "communal" | "mercantile" | "resilient" | "devout" | null;
+  /** What the island points to at a feast or a gift: whichever trade has clearly given it the most, over time. */
+  signature: string | null;
+  /** Running tally of what each day's work has made, behind the signature above. */
+  trade: Record<string, number>;
+  /** The citizen the island's own trust names as its own, once someone has clearly stood out. */
+  notable: AgentId | null;
+  /** Coins across the island (every purse and every till) as of the last count, so growth can be told from a good week. */
+  wealth: number;
+  /** A short phrase for what the island has become. */
+  descriptor: string;
+  /** The day this last changed in a way worth noting. */
+  updatedDay: number;
+}
 export interface TownSnapshot {
   t: number; day: number; weather: string; flourShortage: boolean; fishery?: number;
   /** Places whose state can change: plots, sites, what people built, beds and owners. Positions come from the code. */
@@ -359,5 +378,5 @@ export interface TownSnapshot {
   laws: { text: string; by: AgentId; yes: number; no: number; open: boolean; voters?: AgentId[] }[];
   children?: Child[];
   /** The institutions: who is mayor, since when, and what the council has built. */
-  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[] };
+  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture };
 }
