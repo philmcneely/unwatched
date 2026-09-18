@@ -116,6 +116,8 @@ export interface AgentState {
   intelligence: number;
   /** What schooling they have completed so far, 0..1. Starts near nothing; rises with time spent at the school, faster for the more intelligent. */
   education: number;
+  /** Who bore them, if born on the island and grown into a citizen; set once at coming of age, never changed. Absent for anyone who arrived on the boat. Used to find heirs when a parent dies. */
+  parents?: AgentId[] | null;
   id: AgentId;
   persona: Persona;
   needs: { hunger: number; rest: number; social: number; thirst?: number };
@@ -169,6 +171,8 @@ export interface AgentState {
   starving: number; roofless: number;
   /** Days in a row that ended dehydrated, for want of a drink. Two makes you weak, the same as hunger; it does not kill on its own. */
   parched: number;
+  /** A contagious sickness, physics not judgment: caught nearby or carried off the boat, it saps the body while it lasts (feeding the same hunger/thirst hardship a hungry or roofless day already does — there is no separate way to die of it), then passes. `since` is the day it began; `immuneUntil` is the day, if any, through which a recovered body resists catching it again. */
+  illness: { sick: boolean; since: number; immuneUntil: number };
   /** Coins on deposit at the bank, drawing modest interest each night. */
   savings: number;
   /** What is owed the bank: principal plus interest, capped like any debt at twice what was first borrowed. */
@@ -332,7 +336,7 @@ export interface AgentSnapshot {
   foodLessons?: import("./learning.ts").FoodLesson[];
   foodRoutineDecisions?: import("./learning.ts").FoodRoutineDecision[];
     deals?: Deal[];
-    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; savings?: number; debt?: number; debtPrincipal?: number; magnate?: boolean; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"];
+    letters?: OwnerLetter[]; lastConversation?: number; lastThought?: number; instructions?: string; brainKind?: AgentState["brainKind"]; thinkEvery?: number | null; plan?: ActivePlan | null; debts?: { to: AgentId; coins: number; due: number }[]; starving?: number; roofless?: number; parched?: number; illness?: AgentState["illness"]; savings?: number; debt?: number; debtPrincipal?: number; magnate?: boolean; convictions?: number; notoriety?: number; fugitive?: boolean; secretsKnown?: Record<AgentId, string>; watch?: string[]; selves?: AgentState["selves"]; lastSelfDay?: number; projects?: AgentState["projects"]; beliefs?: AgentState["beliefs"]; trustLog?: AgentState["trustLog"]; parents?: AgentState["parents"];
     /** kept so a restart does not ask the same question twice, or forget a letter it promised to answer */
     lastPlan?: ActivePlan | null; replyTo?: number | null; lastHungerThought?: number; starvingThoughtDay?: number; debtThoughtDay?: number; gatheringThoughtId?: number | null;
   };
@@ -345,6 +349,25 @@ export interface Gathering { id: number; kind: "wedding" | "funeral" | "hearing"
 export interface Seal { day: number; hash: string; prev: string; events: number; from: number; to: number }
 /** A law with teeth: what the council's words were read to mean, and what the engine now does. */
 export type Rule = { kind: "tax"; percent: number; text: string } | { kind: "cap"; item: string; price: number; text: string } | { kind: "curfew"; hour: number; text: string };
+/** How the island has come to be, drawn from what it has actually lived through: a few slow leanings, nudged a little each night from the day's real record — never rolled, never set by hand. */
+export interface TownCulture {
+  /** Slow-moving leanings (0..1). */
+  values: { industrious: number; communal: number; mercantile: number; resilient: number; devout: number };
+  /** Whichever leaning is clearly ahead of the rest; null until one truly stands out. */
+  lean: "industrious" | "communal" | "mercantile" | "resilient" | "devout" | null;
+  /** What the island points to at a feast or a gift: whichever trade has clearly given it the most, over time. */
+  signature: string | null;
+  /** Running tally of what each day's work has made, behind the signature above. */
+  trade: Record<string, number>;
+  /** The citizen the island's own trust names as its own, once someone has clearly stood out. */
+  notable: AgentId | null;
+  /** Coins across the island (every purse and every till) as of the last count, so growth can be told from a good week. */
+  wealth: number;
+  /** A short phrase for what the island has become. */
+  descriptor: string;
+  /** The day this last changed in a way worth noting. */
+  updatedDay: number;
+}
 export interface TownSnapshot {
   t: number; day: number; weather: string; flourShortage: boolean; fishery?: number;
   /** Places whose state can change: plots, sites, what people built, beds and owners. Positions come from the code. */
@@ -355,5 +378,5 @@ export interface TownSnapshot {
   laws: { text: string; by: AgentId; yes: number; no: number; open: boolean; voters?: AgentId[] }[];
   children?: Child[];
   /** The institutions: who is mayor, since when, and what the council has built. */
-  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[] };
+  civic?: { evolution?: import("./evolution.ts").EvolutionStory[]; nextDealId?: number; mayor: AgentId | null; elected: number; works: string[]; gatherings?: Gathering[]; wedded?: string[]; chain?: Seal[]; rules?: Rule[]; sayings?: { text: string; by: AgentId[] }[]; culture?: TownCulture };
 }
